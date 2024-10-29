@@ -1,11 +1,16 @@
-use crate::helpers::{run_flow_with_timeout, TestError, TestSource};
-use cortex_ai::{Flow, FlowComponent, FlowFuture, Processor, Source};
+use crate::helpers::{
+    EmptySource, ErrorProcessor, ErrorSource, PassthroughProcessor, SkipProcessor, SkipSource,
+    StreamErrorSource, TestError, TestSource,
+};
+use cortex_ai::Flow;
 use flume::bounded;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[cfg(test)]
 mod flow_tests {
     use super::*;
+    use crate::helpers::run_flow_with_timeout;
 
     #[tokio::test]
     async fn it_should_error_when_source_not_set() {
@@ -27,24 +32,7 @@ mod flow_tests {
     #[tokio::test]
     async fn it_should_handle_source_stream_error() {
         // Given
-        struct ErrorSource;
-
-        impl FlowComponent for ErrorSource {
-            type Input = ();
-            type Output = String;
-            type Error = TestError;
-        }
-
-        impl Source for ErrorSource {
-            fn stream<'a>(
-                &'a self,
-            ) -> FlowFuture<'a, flume::Receiver<Result<Self::Output, Self::Error>>, Self::Error>
-            {
-                Box::pin(async move { Err(TestError("Source stream error".to_string())) })
-            }
-        }
-
-        let flow = Flow::<String, TestError, String>::new().source(ErrorSource);
+        let flow = Flow::<String, TestError, String>::new().source(StreamErrorSource);
         let (_, shutdown_rx) = tokio::sync::broadcast::channel(1);
 
         // When
@@ -54,30 +42,13 @@ mod flow_tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
-            "Test error: Source stream error"
+            "Test error: Stream initialization error"
         );
     }
 
     #[tokio::test]
     async fn it_should_handle_processor_error() {
         // Given
-        struct ErrorProcessor;
-
-        impl FlowComponent for ErrorProcessor {
-            type Input = String;
-            type Output = String;
-            type Error = TestError;
-        }
-
-        impl Processor for ErrorProcessor {
-            fn process<'a>(
-                &'a self,
-                _input: Self::Input,
-            ) -> FlowFuture<'a, Self::Output, Self::Error> {
-                Box::pin(async move { Err(TestError("Process error".to_string())) })
-            }
-        }
-
         let flow = Flow::<String, TestError, String>::new()
             .source(TestSource {
                 data: "test_input".to_string(),
@@ -89,33 +60,15 @@ mod flow_tests {
 
         // Then
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().to_string(), "Test error: Process error");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Test error: Processing failed"
+        );
     }
 
     #[tokio::test]
     async fn it_should_handle_empty_source() {
         // Given
-        struct EmptySource;
-
-        impl FlowComponent for EmptySource {
-            type Input = ();
-            type Output = String;
-            type Error = TestError;
-        }
-
-        impl Source for EmptySource {
-            fn stream<'a>(
-                &'a self,
-            ) -> FlowFuture<'a, flume::Receiver<Result<Self::Output, Self::Error>>, Self::Error>
-            {
-                Box::pin(async move {
-                    let (tx, rx) = bounded(1);
-                    drop(tx); // Close channel immediately
-                    Ok(rx)
-                })
-            }
-        }
-
         let flow = Flow::<String, TestError, String>::new().source(EmptySource);
         let (_, shutdown_rx) = tokio::sync::broadcast::channel(1);
 
@@ -142,5 +95,87 @@ mod flow_tests {
             result.unwrap_err().to_string(),
             "Test error: Flow error: Flow source not set"
         );
+    }
+
+    #[tokio::test]
+    async fn it_should_send_error_feedback_for_source_errors() {
+        // Given
+        let (feedback_tx, feedback_rx) = bounded::<Result<String, TestError>>(1);
+        let feedback_results = Arc::new(Mutex::new(Vec::new()));
+        let feedback_results_clone = feedback_results.clone();
+
+        // Spawn a task to collect feedback
+        tokio::spawn(async move {
+            while let Ok(result) = feedback_rx.recv_async().await {
+                let mut results = feedback_results_clone.lock().unwrap();
+                results.push(result);
+            }
+        });
+
+        let flow: Flow<String, TestError, String> = Flow::new()
+            .source(ErrorSource {
+                feedback: feedback_tx,
+            })
+            .process(PassthroughProcessor);
+
+        // When
+        let result = run_flow_with_timeout(flow, Duration::from_millis(100)).await;
+
+        // Then
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Test error: Source error");
+
+        // Wait a bit for feedback processing
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let feedback_results = feedback_results.lock().unwrap();
+        assert_eq!(feedback_results.len(), 1);
+        assert!(matches!(
+            &feedback_results[0],
+            Err(e) if e.to_string() == "Test error: Source error"
+        ));
+        drop(feedback_results);
+    }
+
+    #[tokio::test]
+    async fn it_should_handle_skipped_items() {
+        // Given
+        let (feedback_tx, feedback_rx) = bounded::<Result<String, TestError>>(1);
+        let feedback_results = Arc::new(Mutex::new(Vec::new()));
+        let feedback_results_clone = feedback_results.clone();
+
+        // Spawn a task to collect feedback
+        tokio::spawn(async move {
+            while let Ok(result) = feedback_rx.recv_async().await {
+                let mut results = feedback_results_clone.lock().unwrap();
+                results.push(result);
+            }
+        });
+
+        let flow: Flow<String, TestError, String> = Flow::new()
+            .source(SkipSource {
+                feedback: feedback_tx,
+            })
+            .process(SkipProcessor);
+
+        // When
+        let result = run_flow_with_timeout(flow, Duration::from_millis(100)).await;
+
+        // Then
+        assert!(result.is_ok());
+        let results = result.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], "skipped");
+
+        // Wait a bit for feedback processing
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let feedback_results = feedback_results.lock().unwrap();
+        assert_eq!(feedback_results.len(), 1);
+        assert!(matches!(
+            &feedback_results[0],
+            Ok(msg) if msg == "skipped"
+        ));
+        drop(feedback_results);
     }
 }

@@ -28,11 +28,15 @@ clean:
 
 # Format code
 fmt:
-    cargo fmt
+    cargo fmt -- --check
+    cargo fmt --all -- --check
 
 # Run clippy
 lint:
-    cargo clippy -- -D warnings
+    cargo clippy -- -D warnings -W clippy::all -W clippy::pedantic -W clippy::nursery
+    cargo clippy --all-targets -- -D warnings -W clippy::all -W clippy::pedantic -W clippy::nursery
+    cargo clippy --all-features -- -D warnings -W clippy::all -W clippy::pedantic -W clippy::nursery
+
 
 # Run all checks (format, lint, test)
 check: fmt lint test 

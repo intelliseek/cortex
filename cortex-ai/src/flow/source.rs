@@ -1,9 +1,6 @@
 use super::component::FlowComponent;
-use super::types::FlowFuture;
-use flume::Receiver;
-
-pub type SourceReceiver<Output, Error> = Receiver<Result<Output, Error>>;
+use super::types::{FlowFuture, SourceOutput};
 
 pub trait Source: FlowComponent<Input = ()> {
-    fn stream(&self) -> FlowFuture<'_, SourceReceiver<Self::Output, Self::Error>, Self::Error>;
+    fn stream(&self) -> FlowFuture<'_, SourceOutput<Self::Output, Self::Error>, Self::Error>;
 }

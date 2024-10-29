@@ -1,13 +1,13 @@
 use cortex_ai::{
-    composer::flow::FlowError, Condition, ConditionFuture, Flow, FlowComponent, FlowFuture,
-    Processor, Source,
+    composer::flow::FlowError, flow::types::SourceOutput, Condition, ConditionFuture, Flow,
+    FlowComponent, FlowFuture, Processor, Source,
 };
 use std::error::Error;
 use std::fmt;
 use tokio::sync::broadcast;
 
 // Custom error type for our example
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ExampleError(String);
 
 impl fmt::Display for ExampleError {
@@ -20,7 +20,7 @@ impl Error for ExampleError {}
 
 impl From<FlowError> for ExampleError {
     fn from(error: FlowError) -> Self {
-        ExampleError(error.to_string())
+        Self(error.to_string())
     }
 }
 
@@ -44,24 +44,38 @@ impl FlowComponent for ExampleProcessor {
 }
 
 impl Source for ExampleSource {
-    fn stream(
-        &self,
-    ) -> FlowFuture<'_, flume::Receiver<Result<Self::Output, Self::Error>>, Self::Error> {
+    fn stream(&self) -> FlowFuture<'_, SourceOutput<Self::Output, Self::Error>, Self::Error> {
         Box::pin(async move {
             let (tx, rx) = flume::bounded(10);
+            let (feedback_tx, feedback_rx) = flume::bounded(10);
+
             // Example: send one message
             println!("Sending message");
             tx.send(Ok("Sample data".to_string())).unwrap();
-            drop(tx);  // Close the channel after sending data
-            Ok(rx)
+            drop(tx);
+
+            // Handle feedback
+            tokio::spawn(async move {
+                while let Ok(result) = feedback_rx.recv_async().await {
+                    match result {
+                        Ok(data) => println!("Processing succeeded: {data}"),
+                        Err(e) => println!("Processing failed: {e}"),
+                    }
+                }
+            });
+
+            Ok(SourceOutput {
+                receiver: rx,
+                feedback: feedback_tx,
+            })
         })
     }
 }
 
 impl Processor for ExampleProcessor {
     fn process(&self, input: Self::Input) -> FlowFuture<'_, Self::Output, Self::Error> {
-        println!("Processing: {}", input);
-        Box::pin(async move { Ok(format!("Processed: {}", input)) })
+        println!("Processing: {input}");
+        Box::pin(async move { Ok(format!("Processed: {input}")) })
     }
 }
 
@@ -75,7 +89,7 @@ impl Condition for ExampleCondition {
     fn evaluate(&self, input: Self::Input) -> ConditionFuture<'_, Self::Output, Self::Error> {
         Box::pin(async move {
             let condition_met = input.contains("Sample");
-            println!("Condition met: {}", condition_met);
+            println!("Condition met: {condition_met}");
             Ok((condition_met, Some(input)))
         })
     }

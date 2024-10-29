@@ -36,6 +36,7 @@ where
         }
     }
 
+    #[must_use]
     pub fn process<ProcessorType>(mut self, processor: ProcessorType) -> Self
     where
         ProcessorType: Processor<Input = DataType, Output = DataType, Error = ErrorType>
@@ -47,6 +48,7 @@ where
         self
     }
 
+    #[must_use]
     pub fn end(self) -> Flow<DataType, ErrorType, OutputType> {
         let branch_stage = Stage::Branch(Box::new(BranchStage {
             condition: self.condition,

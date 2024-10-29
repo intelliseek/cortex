@@ -15,6 +15,7 @@ where
     OutputType: Send + Sync + 'static,
     ErrorType: Error + Send + Sync + 'static,
 {
+    #[must_use]
     pub fn new(
         condition: Box<
             dyn Condition<Input = DataType, Output = OutputType, Error = ErrorType> + Send + Sync,
@@ -28,6 +29,7 @@ where
         }
     }
 
+    #[must_use]
     pub fn process<ProcessorType>(mut self, processor: ProcessorType) -> Self
     where
         ProcessorType: Processor<Input = DataType, Output = DataType, Error = ErrorType>
@@ -39,6 +41,7 @@ where
         self
     }
 
+    #[must_use]
     pub fn otherwise(self) -> OtherwiseBuilder<DataType, OutputType, ErrorType> {
         OtherwiseBuilder::new(self.condition, self.then_branch, self.parent)
     }
