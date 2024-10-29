@@ -1,9 +1,10 @@
-use cortex_pipeline::{
-    Condition, ConditionFuture, Pipeline, PipelineComponent, PipelineFuture, Processor, Source,
+use cortex_ai::{
+    composer::flow::FlowError, Condition, ConditionFuture, Flow, FlowComponent, FlowFuture,
+    Processor, Source,
 };
-
 use std::error::Error;
 use std::fmt;
+use tokio::sync::broadcast;
 
 // Custom error type for our example
 #[derive(Debug)]
@@ -17,74 +18,74 @@ impl fmt::Display for ExampleError {
 
 impl Error for ExampleError {}
 
+impl From<FlowError> for ExampleError {
+    fn from(error: FlowError) -> Self {
+        ExampleError(error.to_string())
+    }
+}
+
 // We'll create some example components
 struct ExampleSource;
 struct ExampleProcessor;
 struct ExampleCondition;
 
 // Implement the necessary traits (simplified for demonstration)
-impl PipelineComponent for ExampleSource {
+impl FlowComponent for ExampleSource {
     type Input = ();
     type Output = String;
     type Error = ExampleError;
 }
 
-impl Source for ExampleSource {
-    fn stream<'a>(
-        &'a self,
-    ) -> PipelineFuture<'a, flume::Receiver<Result<Self::Output, Self::Error>>, Self::Error> {
-        Box::pin(async move {
-            let (tx, rx) = flume::bounded(10);
-            // Example: send one message
-            tx.send(Ok("Sample data".to_string())).unwrap();
-            Ok(rx)
-        })
-    }
-}
-
-impl PipelineComponent for ExampleProcessor {
+// Add FlowComponent implementation for ExampleProcessor
+impl FlowComponent for ExampleProcessor {
     type Input = String;
     type Output = String;
     type Error = ExampleError;
 }
 
-impl Processor for ExampleProcessor {
-    fn process<'a>(&'a self, input: Self::Input) -> PipelineFuture<'a, Self::Output, Self::Error> {
-        Box::pin(async move { Ok(format!("Processed: {}", input)) })
-    }
-}
-
-// Add this implementation before implementing Condition
-impl PipelineComponent for ExampleCondition {
-    type Input = String;
-    type Output = bool;
-    type Error = ExampleError;
-}
-
-impl Condition for ExampleCondition {
-    fn evaluate<'a>(
-        &'a self,
-        input: Self::Input,
-    ) -> ConditionFuture<'a, (bool, Option<Self::Output>), Self::Error> {
+impl Source for ExampleSource {
+    fn stream(
+        &self,
+    ) -> FlowFuture<'_, flume::Receiver<Result<Self::Output, Self::Error>>, Self::Error> {
         Box::pin(async move {
-            let condition_met = input.contains("Sample");
-            Ok((
-                condition_met,
-                if condition_met {
-                    Some((true, Some(true)))
-                } else {
-                    None
-                },
-            ))
+            let (tx, rx) = flume::bounded(10);
+            // Example: send one message
+            println!("Sending message");
+            tx.send(Ok("Sample data".to_string())).unwrap();
+            drop(tx);  // Close the channel after sending data
+            Ok(rx)
         })
     }
 }
 
-// For the tokio macro error, we'll use the runtime directly instead
+impl Processor for ExampleProcessor {
+    fn process(&self, input: Self::Input) -> FlowFuture<'_, Self::Output, Self::Error> {
+        println!("Processing: {}", input);
+        Box::pin(async move { Ok(format!("Processed: {}", input)) })
+    }
+}
+
+impl FlowComponent for ExampleCondition {
+    type Input = String;
+    type Output = String;
+    type Error = ExampleError;
+}
+
+impl Condition for ExampleCondition {
+    fn evaluate(&self, input: Self::Input) -> ConditionFuture<'_, Self::Output, Self::Error> {
+        Box::pin(async move {
+            let condition_met = input.contains("Sample");
+            println!("Condition met: {}", condition_met);
+            Ok((condition_met, Some(input)))
+        })
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
-        let pipeline = Pipeline::new()
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let flow = Flow::new()
             .source(ExampleSource)
             .when(ExampleCondition)
             .process(ExampleProcessor)
@@ -93,7 +94,19 @@ fn main() -> Result<(), Box<dyn Error>> {
             .end()
             .process(ExampleProcessor);
 
-        pipeline.run_stream().await?;
-        Ok(())
+        let handle = tokio::spawn(async move { flow.run_stream(shutdown_rx).await });
+
+        // Let it run for a while
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+        // Try to send shutdown signal, ignore if flow already completed
+        let _ = shutdown_tx.send(());
+
+        // Wait for the flow to complete and handle any errors
+        handle
+            .await
+            .map_err(|e| Box::new(ExampleError(e.to_string())) as Box<dyn Error>)?
+            .map(|_results| ()) // Map Vec<String> to ()
+            .map_err(|e| Box::new(e) as Box<dyn Error>)
     })
 }

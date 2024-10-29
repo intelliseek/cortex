@@ -1,6 +1,8 @@
 [workspace]
-members = [
-    "cortex-pipeline",  # Your library
-    "cortex-sample"     # Your sample project
-]
 resolver = "2"
+members = ["cortex-ai", "cortex-sample"]
+
+
+[profile.coverage]
+inherits = "test"
+debug = true
