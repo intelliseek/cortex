@@ -1,0 +1,11 @@
+[package]
+name = "cortex-sample"
+version = "0.1.0"
+edition = "2021"
+description = "Sample project demonstrating cortex-pipeline usage"
+license = "MIT"
+
+[dependencies]
+cortex-pipeline = { path = "../cortex-pipeline" }
+tokio = { version = "1.0", features = ["full"] }
+flume = "0.11"

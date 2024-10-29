@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "cortex-pipeline",  # Your library
+    "cortex-sample"     # Your sample project
+]
+resolver = "2"
