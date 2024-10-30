@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
       
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@nightly
         with:
           components: llvm-tools-preview
         
@@ -34,10 +34,17 @@ jobs:
         
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
-        
+
+      - name: Build cortex-ai
+        working-directory: ./cortex-ai
+        run: just build
       - name: Run tests
         working-directory: ./cortex-ai
         run: just test-ci
+
+      - name: Run doctests
+        working-directory: ./cortex-ai
+        run: just test-doc
         
       - name: Check formatting
         working-directory: ./cortex-ai
@@ -56,3 +63,17 @@ jobs:
         with:
           files: ./target/llvm-cov-target/lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@nightly
+      - name: Publish cortex-ai
+        working-directory: ./cortex-ai
+        run: cargo publish --token ${CRATES_TOKEN}
+        env:
+          CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
