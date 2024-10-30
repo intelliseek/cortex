@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/cortex-ai.svg)](https://crates.io/crates/cortex-ai)
 [![Documentation](https://docs.rs/cortex-ai/badge.svg)](https://docs.rs/cortex-ai)
 [![License: MIT](https://img.shields.io/badge/License-Apache-blue.svg)](https://opensource.org/license/apache-2-0)
-[![Coverage Status](https://codecov.io/gh/cortex-ai/cortex-ai/branch/main/graph/badge.svg)](https://codecov.io/gh/cortex-ai/cortex-ai)
+[![Coverage Status](https://codecov.io/gh/intelliseek/cortex-ai/branch/main/graph/badge.svg)](https://codecov.io/gh/intelliseek/cortex-ai)
 
 A high-performance, asynchronous data processing pipeline library in Rust. Implemented to be used in RAG applications providing ready to use OpenAI compatible APIs, especially OpenRouter.ai.
 

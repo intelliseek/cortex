@@ -14,7 +14,9 @@ use tracing::{debug, instrument};
 ///
 /// ```
 /// use cortex_ai::composer::Flow;
-/// use cortex_ai::flow::{FlowComponent, Processor, Condition};
+/// use cortex_ai::flow::condition::Condition;
+/// use cortex_ai::flow::processor::Processor;
+/// use cortex_ai::FlowComponent;
 /// use cortex_ai::FlowError;
 /// use std::error::Error;
 /// use std::fmt;
@@ -60,8 +62,8 @@ use tracing::{debug, instrument};
 /// }
 ///
 /// impl Condition for MyCondition {
-///     fn evaluate(&self, input: Self::Input) -> Pin<Box<dyn Future<Output = Result<(bool, Self::Output), Self::Error>> + Send>> {
-///         Box::pin(async move { Ok((true, false)) })
+///     fn evaluate(&self, input: Self::Input) -> Pin<Box<dyn Future<Output = Result<(bool, Option<Self::Output>), Self::Error>> + Send>> {
+///         Box::pin(async move { Ok((true, Some(false))) })
 ///     }
 /// }
 ///

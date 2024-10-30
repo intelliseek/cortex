@@ -1,9 +1,13 @@
 [package]
 name = "cortex-ai"
 version = "0.1.0"
+authors = ["canavar <abdulkadiryaman@gmail.com>"]
+description = "An asynchronous flow-based processing framework for building flexible data pipelines with conditional branching and error handling"
+documentation = "https://docs.rs/cortex-ai"
+repository = "https://github.com/intelliseek/cortex"
+readme = "README.md"
+license = "Apache-2.0"
 edition = "2021"
-description = "Flow library for Cortex"
-license = "MIT"
 
 [dependencies]
 tokio = { version = "1.0", features = [
