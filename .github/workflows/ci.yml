@@ -21,7 +21,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@nightly
         with:
-          components: llvm-tools-preview
+          components: llvm-tools-preview rustfmt
         
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
@@ -38,6 +38,7 @@ jobs:
       - name: Build cortex-ai
         working-directory: ./cortex-ai
         run: just build
+      
       - name: Run tests
         working-directory: ./cortex-ai
         run: just test-ci
@@ -66,14 +67,16 @@ jobs:
 
   publish:
     name: Publish
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'  
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@nightly
+        
       - name: Publish cortex-ai
-        working-directory: ./cortex-ai
-        run: cargo publish --token ${CRATES_TOKEN}
+        run: cargo publish -p cortex-ai --token ${CRATES_TOKEN}
         env:
           CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
