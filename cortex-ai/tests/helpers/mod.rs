@@ -7,6 +7,7 @@ use std::error::Error;
 use std::fmt;
 use std::time::Duration;
 use tokio::sync::broadcast;
+use tracing_subscriber::EnvFilter;
 
 // Error Types
 #[derive(Debug, Clone)]
@@ -27,20 +28,34 @@ impl From<FlowError> for TestError {
 }
 
 // Test Components
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TestProcessor;
+
+#[derive(Clone)]
 pub struct TestCondition;
+
 pub struct TestSource {
     pub data: String,
+    pub feedback: flume::Sender<Result<String, TestError>>,
 }
+
+#[derive(Clone)]
 pub struct PassthroughProcessor;
+
+#[derive(Clone)]
 pub struct ErrorProcessor;
+
 pub struct EmptySource;
+
 pub struct StreamErrorSource;
+
+#[derive(Clone)]
 pub struct SkipProcessor;
+
 pub struct ErrorSource {
     pub feedback: flume::Sender<Result<String, TestError>>,
 }
+
 pub struct SkipSource {
     pub feedback: flume::Sender<Result<String, TestError>>,
 }
@@ -82,25 +97,15 @@ impl FlowComponent for TestSource {
 impl Source for TestSource {
     fn stream(&self) -> FlowFuture<'_, SourceOutput<Self::Output, Self::Error>, Self::Error> {
         let data = self.data.clone();
+        let feedback = self.feedback.clone();
         Box::pin(async move {
             let (tx, rx) = bounded(1);
-            let (feedback_tx, feedback_rx) = bounded(1);
-
             tx.send(Ok(data)).unwrap();
             drop(tx);
 
-            tokio::spawn(async move {
-                while let Ok(result) = feedback_rx.recv_async().await {
-                    match result {
-                        Ok(processed_data) => println!("Processing succeeded: {processed_data}"),
-                        Err(e) => println!("Processing failed: {e}"),
-                    }
-                }
-            });
-
             Ok(SourceOutput {
                 receiver: rx,
-                feedback: feedback_tx,
+                feedback,
             })
         })
     }
@@ -249,4 +254,25 @@ where
     let _ = shutdown_tx.send(());
 
     handle.await.unwrap()
+}
+
+// Add this function to initialize tracing for tests
+pub fn init_tracing() {
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::from_default_env()
+                .add_directive("cortex_ai=debug".parse().unwrap())
+                .add_directive("test=debug".parse().unwrap()),
+        )
+        .with_test_writer() // Write to test output
+        .with_thread_ids(true) // Show thread IDs
+        .with_file(true) // Show file names
+        .with_line_number(true) // Show line numbers
+        .with_target(false) // Hide target
+        .compact() // Use compact format
+        .try_init();
+
+    if subscriber.is_err() {
+        println!("Warning: tracing already initialized");
+    }
 }

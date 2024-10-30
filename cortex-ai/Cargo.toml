@@ -6,8 +6,28 @@ description = "Flow library for Cortex"
 license = "MIT"
 
 [dependencies]
-tokio = { version = "1.0", features = ["full"] }
+tokio = { version = "1.0", features = [
+    "full",
+    "sync",
+    "macros",
+    "rt-multi-thread",
+] }
 flume = "0.11"
+tracing = "0.1"
+tracing-futures = "0.2"
 
 [dev-dependencies]
-tokio = { version = "1.0", features = ["full", "test-util"] }
+tokio = { version = "1.0", features = [
+    "full",
+    "test-util",
+    "macros",
+    "rt",
+    "rt-multi-thread",
+    "sync",
+] }
+criterion = { version = "0.5", features = ["async_tokio"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[bench]]
+name = "flow_benchmark"
+harness = false
