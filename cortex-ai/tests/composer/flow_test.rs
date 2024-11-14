@@ -56,7 +56,7 @@ mod flow_tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
-            "Test error: Flow error: Flow source not set"
+            "Test error: Flow error: No source configured"
         );
     }
 
@@ -134,7 +134,7 @@ mod flow_tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
-            "Test error: Flow error: Flow source not set"
+            "Test error: Flow error: No source configured"
         );
     }
 

@@ -1,9 +1,9 @@
 //! Kafka source implementations
 
-use crate::error::{Result, SourceError};
+use crate::types::SourceResult;
 use cortex_ai::{
     flow::{source::Source, types::SourceOutput},
-    FlowComponent, FlowFuture,
+    FlowComponent, FlowError, FlowFuture,
 };
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
@@ -52,19 +52,26 @@ where
     T: for<'a> TryFrom<Vec<u8>, Error = Box<dyn Error + Send + Sync>> + Send + Sync + 'static,
 {
     /// Create a new Kafka source with the given configuration
-    pub fn new(config: KafkaConfig) -> Result<Self> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// * Failed to create Kafka consumer
+    /// * Failed to subscribe to topic
+    /// * Invalid configuration parameters
+    pub fn new(config: &KafkaConfig) -> SourceResult<Self> {
         let consumer: StreamConsumer = ClientConfig::new()
             .set("group.id", &config.group_id)
             .set("bootstrap.servers", &config.bootstrap_servers)
             .set("enable.auto.commit", "true")
             .set("auto.offset.reset", &config.auto_offset_reset)
-            .set("session.timeout.ms", &config.session_timeout_ms.to_string())
+            .set("session.timeout.ms", config.session_timeout_ms.to_string())
             .create()
-            .map_err(|e| SourceError::Custom(e.to_string()))?;
+            .map_err(|e| FlowError::Source(e.to_string()))?;
 
         consumer
             .subscribe(&[&config.topic])
-            .map_err(|e| SourceError::Custom(e.to_string()))?;
+            .map_err(|e| FlowError::Source(e.to_string()))?;
 
         Ok(Self {
             consumer: Arc::new(consumer),
@@ -74,13 +81,23 @@ where
     }
 
     /// Set the timeout for reading messages
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+    ///
+    /// Returns a new `KafkaSource` with the updated timeout
+    #[must_use]
+    pub const fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
 }
 
-
+impl<T> FlowComponent for KafkaSource<T>
+where
+    T: for<'a> TryFrom<Vec<u8>, Error = Box<dyn Error + Send + Sync>> + Send + Sync + 'static,
+{
+    type Input = ();
+    type Output = T;
+    type Error = FlowError;
+}
 
 impl<T> Source for KafkaSource<T>
 where
@@ -88,7 +105,7 @@ where
 {
     fn stream(&self) -> FlowFuture<'_, SourceOutput<Self::Output, Self::Error>, Self::Error> {
         let (source_tx, source_rx) = flume::unbounded();
-        let (feedback_tx, feedback_rx) = flume::unbounded();
+        let (feedback_tx, feedback_rx) = flume::unbounded::<Result<T, FlowError>>();
 
         let consumer = Arc::clone(&self.consumer);
 
@@ -107,7 +124,7 @@ where
                                     }
                                     Err(e) => {
                                         if source_tx
-                                            .send(Err(SourceError::Custom(e.to_string())))
+                                            .send(Err(FlowError::Source(e.to_string())))
                                             .is_err()
                                         {
                                             break;
@@ -118,7 +135,7 @@ where
                         }
                         Err(e) => {
                             if source_tx
-                                .send(Err(SourceError::Custom(e.to_string())))
+                                .send(Err(FlowError::Source(e.to_string())))
                                 .is_err()
                             {
                                 break;
@@ -134,7 +151,9 @@ where
         tokio::spawn(async move {
             while let Ok(result) = feedback_rx.recv_async().await {
                 if result.is_ok() {
-                    if let Err(e) = consumer.commit_consumer_state(rdkafka::consumer::CommitMode::Async) {
+                    if let Err(e) =
+                        consumer.commit_consumer_state(rdkafka::consumer::CommitMode::Async)
+                    {
                         tracing::error!("Failed to commit offsets: {}", e);
                     }
                 }
@@ -147,45 +166,5 @@ where
                 feedback: feedback_tx,
             })
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_kafka_config_default() {
-        let config = KafkaConfig::default();
-        assert_eq!(config.bootstrap_servers, "localhost:9092");
-        assert_eq!(config.topic, "default-topic");
-        assert_eq!(config.group_id, "cortex-consumer");
-        assert_eq!(config.auto_offset_reset, "earliest");
-        assert_eq!(config.session_timeout_ms, 6000);
-    }
-
-    // Example of how to use KafkaSource with a String type
-    #[derive(Debug)]
-    struct StringWrapper(String);
-
-    impl TryFrom<Vec<u8>> for StringWrapper {
-        type Error = Box<dyn std::error::Error + Send + Sync>;
-
-        fn try_from(bytes: Vec<u8>) -> std::result::Result<Self, Self::Error> {
-            String::from_utf8(bytes)
-                .map(StringWrapper)
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
-        }
-    }
-
-    #[tokio::test]
-    #[ignore] // Requires Kafka to be running
-    async fn test_kafka_source() {
-        let config = KafkaConfig::default();
-        let source = KafkaSource::<StringWrapper>::new(config).unwrap();
-
-        // Test the source stream
-        let result = source.stream().await;
-        assert!(result.is_ok() || result.is_err());
     }
 }

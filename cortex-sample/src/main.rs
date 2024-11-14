@@ -1,12 +1,10 @@
 use cortex_ai::{
-    composer::flow::FlowError,
-    flow::types::SourceOutput,
-    Condition, ConditionFuture, Flow, FlowComponent, FlowFuture, Processor, Source,
+    composer::flow::FlowError, Condition, ConditionFuture, Flow, FlowComponent, FlowFuture,
+    Processor,
 };
 use cortex_sources::kafka::{KafkaConfig, KafkaSource};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
-use std::fmt;
 use std::marker::PhantomData;
 use tokio::sync::broadcast;
 
@@ -23,26 +21,7 @@ impl TryFrom<Vec<u8>> for ClickBehavior {
     type Error = Box<dyn Error + Send + Sync>;
 
     fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
-        serde_json::from_slice(&bytes)
-            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)
-    }
-}
-
-// Custom error type
-#[derive(Debug, Clone)]
-struct ProcessingError(String);
-
-impl fmt::Display for ProcessingError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Processing error: {}", self.0)
-    }
-}
-
-impl Error for ProcessingError {}
-
-impl From<FlowError> for ProcessingError {
-    fn from(error: FlowError) -> Self {
-        Self(error.to_string())
+        serde_json::from_slice(&bytes).map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)
     }
 }
 
@@ -60,7 +39,8 @@ impl<T, F> FieldFilter<T, F>
 where
     F: Fn(&T) -> String,
 {
-    fn new(field_extractor: F, expected_value: String) -> Self {
+    #[must_use]
+    pub const fn new(field_extractor: F, expected_value: String) -> Self {
         Self {
             field_extractor,
             expected_value,
@@ -76,7 +56,7 @@ where
 {
     type Input = T;
     type Output = T;
-    type Error = ProcessingError;
+    type Error = FlowError;
 }
 
 impl<T, F> Processor for FieldFilter<T, F>
@@ -87,12 +67,14 @@ where
     fn process(&self, input: Self::Input) -> FlowFuture<'_, Self::Output, Self::Error> {
         let expected = self.expected_value.clone();
         let actual = (self.field_extractor)(&input);
-        
+
         Box::pin(async move {
             if actual == expected {
                 Ok(input)
             } else {
-                Err(ProcessingError(format!("Field mismatch: expected {}, got {}", expected, actual)))
+                Err(FlowError::Process(format!(
+                    "Field mismatch: expected {expected}, got {actual}"
+                )))
             }
         })
     }
@@ -112,7 +94,8 @@ impl<T, F> FieldCondition<T, F>
 where
     F: Fn(&T) -> String,
 {
-    fn new(field_extractor: F, expected_value: String) -> Self {
+    #[must_use]
+    pub const fn new(field_extractor: F, expected_value: String) -> Self {
         Self {
             field_extractor,
             expected_value,
@@ -128,7 +111,7 @@ where
 {
     type Input = T;
     type Output = bool;
-    type Error = ProcessingError;
+    type Error = FlowError;
 }
 
 impl<T, F> Condition for FieldCondition<T, F>
@@ -139,10 +122,8 @@ where
     fn evaluate(&self, input: Self::Input) -> ConditionFuture<'_, Self::Output, Self::Error> {
         let expected = self.expected_value.clone();
         let actual = (self.field_extractor)(&input);
-        
-        Box::pin(async move {
-            Ok((actual == expected, Some(true)))
-        })
+
+        Box::pin(async move { Ok((actual == expected, Some(true))) })
     }
 }
 
@@ -157,8 +138,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         session_timeout_ms: 6000,
     };
 
-    // Create Kafka source for ClickBehavior
-    let source = KafkaSource::<ClickBehavior>::new(kafka_config)?;
+    // Create Kafka source for ClickBehavior - pass reference to config
+    let source = KafkaSource::<ClickBehavior>::new(&kafka_config)?;
 
     // Create shutdown channel
     let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
@@ -197,7 +178,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     );
                 }
             }
-            Err(e) => eprintln!("Flow error: {}", e),
+            Err(e) => eprintln!("Flow error: {e}"),
         }
     });
 
