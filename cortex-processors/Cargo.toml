@@ -1,0 +1,15 @@
+[package]
+name = "cortex-processors"
+version = "0.1.0"
+edition = "2021"
+description = "Ready-to-use processors for the Cortex project"
+license = "Apache-2.0"
+repository = "https://github.com/intelliseek/cortex"
+documentation = "https://docs.rs/cortex-processors"
+readme = "README.md"
+
+[dependencies]
+cortex-ai = { path = "../cortex-ai" }
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full"] } 

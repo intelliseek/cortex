@@ -1,126 +1,214 @@
 use cortex_ai::{
-    composer::flow::FlowError, flow::types::SourceOutput, Condition, ConditionFuture, Flow,
-    FlowComponent, FlowFuture, Processor, Source,
+    composer::flow::FlowError,
+    flow::types::SourceOutput,
+    Condition, ConditionFuture, Flow, FlowComponent, FlowFuture, Processor, Source,
 };
+use cortex_sources::kafka::{KafkaConfig, KafkaSource};
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
+use std::marker::PhantomData;
 use tokio::sync::broadcast;
 
-// Custom error type for our example
-#[derive(Debug, Clone)]
-struct ExampleError(String);
+// Define our ClickBehavior type
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ClickBehavior {
+    user_id: String,
+    event_type: String,
+    session_id: String,
+}
 
-impl fmt::Display for ExampleError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Example error: {}", self.0)
+// Implement TryFrom for ClickBehavior to deserialize from Kafka messages
+impl TryFrom<Vec<u8>> for ClickBehavior {
+    type Error = Box<dyn Error + Send + Sync>;
+
+    fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
+        serde_json::from_slice(&bytes)
+            .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)
     }
 }
 
-impl Error for ExampleError {}
+// Custom error type
+#[derive(Debug, Clone)]
+struct ProcessingError(String);
 
-impl From<FlowError> for ExampleError {
+impl fmt::Display for ProcessingError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Processing error: {}", self.0)
+    }
+}
+
+impl Error for ProcessingError {}
+
+impl From<FlowError> for ProcessingError {
     fn from(error: FlowError) -> Self {
         Self(error.to_string())
     }
 }
 
-// We'll create some example components
-struct ExampleSource;
-struct ExampleProcessor;
-struct ExampleCondition;
-
-// Implement the necessary traits (simplified for demonstration)
-impl FlowComponent for ExampleSource {
-    type Input = ();
-    type Output = String;
-    type Error = ExampleError;
+// Generic processor that filters by a field
+struct FieldFilter<T, F>
+where
+    F: Fn(&T) -> String,
+{
+    field_extractor: F,
+    expected_value: String,
+    _phantom: PhantomData<T>,
 }
 
-// Add FlowComponent implementation for ExampleProcessor
-impl FlowComponent for ExampleProcessor {
-    type Input = String;
-    type Output = String;
-    type Error = ExampleError;
-}
-
-impl Source for ExampleSource {
-    fn stream(&self) -> FlowFuture<'_, SourceOutput<Self::Output, Self::Error>, Self::Error> {
-        Box::pin(async move {
-            let (tx, rx) = flume::bounded(10);
-            let (feedback_tx, feedback_rx) = flume::bounded(10);
-
-            // Example: send one message
-            println!("Sending message");
-            tx.send(Ok("Sample data".to_string())).unwrap();
-            drop(tx);
-
-            // Handle feedback
-            tokio::spawn(async move {
-                while let Ok(result) = feedback_rx.recv_async().await {
-                    match result {
-                        Ok(data) => println!("Processing succeeded: {data}"),
-                        Err(e) => println!("Processing failed: {e}"),
-                    }
-                }
-            });
-
-            Ok(SourceOutput {
-                receiver: rx,
-                feedback: feedback_tx,
-            })
-        })
+impl<T, F> FieldFilter<T, F>
+where
+    F: Fn(&T) -> String,
+{
+    fn new(field_extractor: F, expected_value: String) -> Self {
+        Self {
+            field_extractor,
+            expected_value,
+            _phantom: PhantomData,
+        }
     }
 }
 
-impl Processor for ExampleProcessor {
+impl<T, F> FlowComponent for FieldFilter<T, F>
+where
+    T: Clone + Send + Sync + 'static,
+    F: Fn(&T) -> String + Send + Sync + 'static,
+{
+    type Input = T;
+    type Output = T;
+    type Error = ProcessingError;
+}
+
+impl<T, F> Processor for FieldFilter<T, F>
+where
+    T: Clone + Send + Sync + 'static,
+    F: Fn(&T) -> String + Send + Sync + 'static,
+{
     fn process(&self, input: Self::Input) -> FlowFuture<'_, Self::Output, Self::Error> {
-        println!("Processing: {input}");
-        Box::pin(async move { Ok(format!("Processed: {input}")) })
-    }
-}
-
-impl FlowComponent for ExampleCondition {
-    type Input = String;
-    type Output = String;
-    type Error = ExampleError;
-}
-
-impl Condition for ExampleCondition {
-    fn evaluate(&self, input: Self::Input) -> ConditionFuture<'_, Self::Output, Self::Error> {
+        let expected = self.expected_value.clone();
+        let actual = (self.field_extractor)(&input);
+        
         Box::pin(async move {
-            let condition_met = input.contains("Sample");
-            println!("Condition met: {condition_met}");
-            Ok((condition_met, Some(input)))
+            if actual == expected {
+                Ok(input)
+            } else {
+                Err(ProcessingError(format!("Field mismatch: expected {}, got {}", expected, actual)))
+            }
         })
     }
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async {
-        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
-        let flow = Flow::new()
-            .source(ExampleSource)
-            .when(ExampleCondition)
-            .process(ExampleProcessor)
-            .otherwise()
-            .process(ExampleProcessor)
-            .end()
-            .process(ExampleProcessor);
+// Generic condition that checks a field
+struct FieldCondition<T, F>
+where
+    F: Fn(&T) -> String,
+{
+    field_extractor: F,
+    expected_value: String,
+    _phantom: PhantomData<T>,
+}
 
-        let handle = tokio::spawn(async move { flow.run_stream(shutdown_rx).await });
+impl<T, F> FieldCondition<T, F>
+where
+    F: Fn(&T) -> String,
+{
+    fn new(field_extractor: F, expected_value: String) -> Self {
+        Self {
+            field_extractor,
+            expected_value,
+            _phantom: PhantomData,
+        }
+    }
+}
 
-        // Let it run for a while
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+impl<T, F> FlowComponent for FieldCondition<T, F>
+where
+    T: Clone + Send + Sync + 'static,
+    F: Fn(&T) -> String + Send + Sync + 'static,
+{
+    type Input = T;
+    type Output = bool;
+    type Error = ProcessingError;
+}
 
-        // Try to send shutdown signal, ignore if flow already completed
-        let _ = shutdown_tx.send(());
+impl<T, F> Condition for FieldCondition<T, F>
+where
+    T: Clone + Send + Sync + 'static,
+    F: Fn(&T) -> String + Send + Sync + 'static,
+{
+    fn evaluate(&self, input: Self::Input) -> ConditionFuture<'_, Self::Output, Self::Error> {
+        let expected = self.expected_value.clone();
+        let actual = (self.field_extractor)(&input);
+        
+        Box::pin(async move {
+            Ok((actual == expected, Some(true)))
+        })
+    }
+}
 
-        // Wait for the flow to complete and handle any errors
-        handle
-            .await
-            .map_err(|e| Box::new(ExampleError(e.to_string())) as Box<dyn Error>)?
-            .map(|_results| ()) // Map Vec<String> to ()
-            .map_err(|e| Box::new(e) as Box<dyn Error>)
-    })
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    // Configure Kafka source
+    let kafka_config = KafkaConfig {
+        bootstrap_servers: "localhost:9092".to_string(),
+        topic: "click-events".to_string(),
+        group_id: "click-processor".to_string(),
+        auto_offset_reset: "earliest".to_string(),
+        session_timeout_ms: 6000,
+    };
+
+    // Create Kafka source for ClickBehavior
+    let source = KafkaSource::<ClickBehavior>::new(kafka_config)?;
+
+    // Create shutdown channel
+    let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+
+    // Build and run the flow
+    let flow = Flow::new()
+        .source(source)
+        .process(FieldFilter::new(
+            |click: &ClickBehavior| click.event_type.clone(),
+            "button_click".to_string(),
+        ))
+        .when(FieldCondition::new(
+            |click: &ClickBehavior| click.session_id.clone(),
+            "session123".to_string(),
+        ))
+        .process(FieldFilter::new(
+            |click: &ClickBehavior| click.event_type.clone(),
+            "purchase".to_string(),
+        ))
+        .otherwise()
+        .process(FieldFilter::new(
+            |click: &ClickBehavior| click.event_type.clone(),
+            "view".to_string(),
+        ))
+        .end();
+
+    // Run the flow
+    let handle = tokio::spawn(async move {
+        match flow.run_stream(shutdown_rx).await {
+            Ok(results) => {
+                println!("Processed {} events", results.len());
+                for result in results {
+                    println!(
+                        "User: {}, Event: {}, Session: {}",
+                        result.user_id, result.event_type, result.session_id
+                    );
+                }
+            }
+            Err(e) => eprintln!("Flow error: {}", e),
+        }
+    });
+
+    // Let it run for a while
+    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+
+    // Send shutdown signal
+    let _ = shutdown_tx.send(());
+
+    // Wait for the flow to complete
+    handle.await?;
+
+    Ok(())
 }

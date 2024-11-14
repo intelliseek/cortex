@@ -1,0 +1,23 @@
+[package]
+name = "cortex-sources"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+documentation.workspace = true
+description = "Ready-made source implementations for various data inputs in the Cortex ecosystem"
+keywords = ["async", "source", "data-processing", "rag", "ai"]
+categories = ["asynchronous", "data-structures"]
+
+[dependencies]
+cortex-ai = { path = "../cortex-ai", version = "0.1.0" }
+tokio = { version = "1.36", features = ["full"] }
+thiserror = "1.0"
+rdkafka = { version = "0.36", features = ["cmake-build"] }
+futures = "0.3"
+tracing = "0.1"
+flume = "0.11.1"
+
+[dev-dependencies]
+tokio-test = "0.4"

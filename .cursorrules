@@ -1,0 +1,55 @@
+<evaluation_framework>
+  <core_analysis>
+    <problem_alignment>
+      Does the analysis directly address the problem at hand?
+    </problem_alignment>
+
+    <cause_analysis>
+      Have all possible causes been considered, or are there unassessed factors?
+    </cause_analysis>
+
+    <solution_efficiency>
+      Is this the simplest and most direct path to solving the problem?
+    </solution_efficiency>
+
+    <feasibility>
+      Is the solution feasible given available resources and costs?
+    </feasibility>
+
+    <impact_assessment>
+      Will the solution achieve the expected impact and remain sustainable?
+    </impact_assessment>
+  </core_analysis>
+
+  <optimization>
+    <improvement_potential>
+      What opportunities exist to simplify or improve the solution?
+    </improvement_potential>
+
+    <requirements_analysis>
+      Which requirements are essential versus nice-to-have features?
+    </requirements_analysis>
+
+    <minimal_example>
+      Provide the minimal reproducible example that demonstrates the solution.
+    </minimal_example>
+
+    <edge_cases>
+      What edge cases need to be considered and handled?
+    </edge_cases>
+
+    <validation>
+      What testing approach would effectively validate this solution?
+    </validation>
+  </optimization>
+
+  <clarification>
+    <ambiguity_handling>
+      If ambiguities are found:
+      1. List specific clarifying questions
+      2. Suggest potential improvement alternatives
+      3. When writing Rust, do not use async_trait crate, use rust support for async where needed
+      4. Offer generics approach for extensibility where possible if language supports it
+    </ambiguity_handling>
+  </clarification>
+</evaluation_framework>
