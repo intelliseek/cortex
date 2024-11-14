@@ -1,5 +1,5 @@
 use crate::helpers::{
-    init_tracing, run_flow_with_timeout, TestCondition, TestError, TestProcessor, TestSource,
+    init_tracing, run_flow_with_timeout, TestCondition, TestProcessor, TestSource,
 };
 use cortex_ai::{Condition, ConditionFuture, Flow, FlowComponent};
 use flume::bounded;
@@ -8,6 +8,8 @@ use tracing::info;
 
 #[cfg(test)]
 mod branch_builder_tests {
+    use cortex_ai::FlowError;
+
     use super::*;
 
     struct ErrorCondition;
@@ -15,12 +17,12 @@ mod branch_builder_tests {
     impl FlowComponent for ErrorCondition {
         type Input = String;
         type Output = String;
-        type Error = TestError;
+        type Error = FlowError;
     }
 
     impl Condition for ErrorCondition {
         fn evaluate(&self, _input: Self::Input) -> ConditionFuture<'_, Self::Output, Self::Error> {
-            Box::pin(async move { Err(TestError("Condition error".to_string())) })
+            Box::pin(async move { Err(FlowError::Condition("Condition error".to_string())) })
         }
     }
 
@@ -29,7 +31,7 @@ mod branch_builder_tests {
         init_tracing();
         info!("Starting then branch execution test");
         // Given
-        let (feedback_tx, _) = bounded::<Result<String, TestError>>(1);
+        let (feedback_tx, _) = bounded::<Result<String, FlowError>>(1);
         let flow = Flow::new()
             .source(TestSource {
                 data: "test_input".to_string(),
@@ -56,7 +58,7 @@ mod branch_builder_tests {
         init_tracing();
         info!("Starting else branch execution test");
         // Given
-        let (feedback_tx, _) = bounded::<Result<String, TestError>>(1);
+        let (feedback_tx, _) = bounded::<Result<String, FlowError>>(1);
         let flow = Flow::new()
             .source(TestSource {
                 data: "no_match".to_string(),
@@ -83,7 +85,7 @@ mod branch_builder_tests {
         init_tracing();
         info!("Starting condition evaluation error test");
         // Given
-        let (feedback_tx, _) = bounded::<Result<String, TestError>>(1);
+        let (feedback_tx, _) = bounded::<Result<String, FlowError>>(1);
         let flow = Flow::new()
             .source(TestSource {
                 data: "test_input".to_string(),
@@ -102,7 +104,7 @@ mod branch_builder_tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
-            "Test error: Condition error"
+            "Condition error: Condition error"
         );
     }
 }

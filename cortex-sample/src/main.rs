@@ -1,6 +1,5 @@
 use cortex_ai::{
-    composer::flow::FlowError, Condition, ConditionFuture, Flow, FlowComponent, FlowFuture,
-    Processor,
+    Condition, ConditionFuture, Flow, FlowComponent, FlowError, FlowFuture, Processor,
 };
 use cortex_sources::kafka::{KafkaConfig, KafkaSource};
 use serde::{Deserialize, Serialize};

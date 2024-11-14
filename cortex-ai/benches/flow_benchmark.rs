@@ -1,6 +1,6 @@
 use cortex_ai::{
-    composer::flow::FlowError, flow::types::SourceOutput, Condition, ConditionFuture, Flow,
-    FlowComponent, FlowFuture, Processor, Source,
+    flow::types::SourceOutput, Condition, ConditionFuture, Flow, FlowComponent, FlowError,
+    FlowFuture, Processor, Source,
 };
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::error::Error;

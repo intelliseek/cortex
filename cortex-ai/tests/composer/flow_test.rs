@@ -1,6 +1,6 @@
 use crate::helpers::{
     init_tracing, EmptySource, ErrorProcessor, ErrorSource, PassthroughProcessor, SkipProcessor,
-    SkipSource, StreamErrorSource, TestError, TestSource,
+    SkipSource, StreamErrorSource, TestSource,
 };
 use cortex_ai::Flow;
 use flume::bounded;
@@ -10,7 +10,7 @@ use tracing::info;
 
 #[cfg(test)]
 mod flow_tests {
-    use cortex_ai::{flow::types::SourceOutput, FlowComponent, FlowFuture, Source};
+    use cortex_ai::{flow::types::SourceOutput, FlowComponent, FlowError, FlowFuture, Source};
     use flume::Receiver;
 
     use super::*;
@@ -18,14 +18,14 @@ mod flow_tests {
 
     // Move struct definitions to the top
     struct MultiSource {
-        rx: Receiver<Result<String, TestError>>,
-        feedback: flume::Sender<Result<String, TestError>>,
+        rx: Receiver<Result<String, FlowError>>,
+        feedback: flume::Sender<Result<String, FlowError>>,
     }
 
     impl FlowComponent for MultiSource {
         type Input = ();
         type Output = String;
-        type Error = TestError;
+        type Error = FlowError;
     }
 
     impl Source for MultiSource {
@@ -46,7 +46,7 @@ mod flow_tests {
         init_tracing();
         info!("Starting source not set test");
         // Given
-        let flow = Flow::<String, TestError, String>::new();
+        let flow = Flow::<String, FlowError, String>::new();
         let (_, shutdown_rx) = tokio::sync::broadcast::channel(1);
 
         // When
@@ -56,7 +56,7 @@ mod flow_tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
-            "Test error: Flow error: No source configured"
+            "Flow error: No source configured"
         );
     }
 
@@ -65,7 +65,7 @@ mod flow_tests {
         init_tracing();
         info!("Starting source stream error test");
         // Given
-        let flow = Flow::<String, TestError, String>::new().source(StreamErrorSource);
+        let flow = Flow::<String, FlowError, String>::new().source(StreamErrorSource);
         let (_, shutdown_rx) = tokio::sync::broadcast::channel(1);
 
         // When
@@ -75,7 +75,7 @@ mod flow_tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
-            "Test error: Stream initialization error"
+            "Source error: Stream initialization error"
         );
     }
 
@@ -84,8 +84,8 @@ mod flow_tests {
         init_tracing();
         info!("Starting processor error test");
         // Given
-        let (feedback_tx, _) = bounded::<Result<String, TestError>>(1);
-        let flow = Flow::<String, TestError, String>::new()
+        let (feedback_tx, _) = bounded::<Result<String, FlowError>>(1);
+        let flow = Flow::<String, FlowError, String>::new()
             .source(TestSource {
                 data: "test_input".to_string(),
                 feedback: feedback_tx,
@@ -99,7 +99,7 @@ mod flow_tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
-            "Test error: Processing failed"
+            "Process error: Processing failed"
         );
     }
 
@@ -108,7 +108,7 @@ mod flow_tests {
         init_tracing();
         info!("Starting empty source test");
         // Given
-        let flow = Flow::<String, TestError, String>::new().source(EmptySource);
+        let flow = Flow::<String, FlowError, String>::new().source(EmptySource);
         let (_, shutdown_rx) = tokio::sync::broadcast::channel(1);
 
         // When
@@ -124,7 +124,7 @@ mod flow_tests {
         init_tracing();
         info!("Starting flow using default test");
         // Given
-        let flow = Flow::<String, TestError, String>::default();
+        let flow = Flow::<String, FlowError, String>::default();
 
         // When
         let (_, shutdown_rx) = tokio::sync::broadcast::channel(1);
@@ -134,7 +134,7 @@ mod flow_tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
-            "Test error: Flow error: No source configured"
+            "Flow error: No source configured"
         );
     }
 
@@ -143,8 +143,8 @@ mod flow_tests {
         init_tracing();
         info!("Starting send error feedback for source errors test");
         // Given
-        let (feedback_tx, feedback_rx) = bounded::<Result<String, TestError>>(1);
-        let feedback_results = Arc::new(Mutex::new(Vec::new()));
+        let (feedback_tx, feedback_rx) = bounded::<Result<String, FlowError>>(1);
+        let feedback_results = Arc::new(Mutex::new(Vec::<Result<String, FlowError>>::new()));
         let feedback_results_clone = feedback_results.clone();
 
         // Spawn a task to collect feedback
@@ -155,7 +155,7 @@ mod flow_tests {
             }
         });
 
-        let flow: Flow<String, TestError, String> = Flow::new()
+        let flow: Flow<String, FlowError, String> = Flow::new()
             .source(ErrorSource {
                 feedback: feedback_tx,
             })
@@ -166,7 +166,10 @@ mod flow_tests {
 
         // Then
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().to_string(), "Test error: Source error");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Source error: Source error"
+        );
 
         // Wait a bit for feedback processing
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -175,7 +178,7 @@ mod flow_tests {
         assert_eq!(feedback_results.len(), 1);
         assert!(matches!(
             &feedback_results[0],
-            Err(e) if e.to_string() == "Test error: Source error"
+            Err(e) if e.to_string() == "Source error: Source error"
         ));
         drop(feedback_results);
     }
@@ -185,8 +188,8 @@ mod flow_tests {
         init_tracing();
         info!("Starting handle skipped items test");
         // Given
-        let (feedback_tx, feedback_rx) = bounded::<Result<String, TestError>>(1);
-        let feedback_results = Arc::new(Mutex::new(Vec::new()));
+        let (feedback_tx, feedback_rx) = bounded::<Result<String, FlowError>>(1);
+        let feedback_results = Arc::new(Mutex::new(Vec::<Result<String, FlowError>>::new()));
         let feedback_results_clone = feedback_results.clone();
 
         // Spawn a task to collect feedback
@@ -197,7 +200,7 @@ mod flow_tests {
             }
         });
 
-        let flow: Flow<String, TestError, String> = Flow::new()
+        let flow: Flow<String, FlowError, String> = Flow::new()
             .source(SkipSource {
                 feedback: feedback_tx,
             })
@@ -229,8 +232,8 @@ mod flow_tests {
         init_tracing();
         info!("Starting set source test");
         // Given
-        let (feedback_tx, _) = bounded::<Result<String, TestError>>(1);
-        let flow = Flow::<String, TestError, String>::new();
+        let (feedback_tx, _) = bounded::<Result<String, FlowError>>(1);
+        let flow = Flow::<String, FlowError, String>::new();
 
         // When
         let flow = flow.source(TestSource {
@@ -249,8 +252,8 @@ mod flow_tests {
         init_tracing();
         info!("Starting handle source item error test");
         // Given
-        let (feedback_tx, feedback_rx) = bounded::<Result<String, TestError>>(1);
-        let feedback_results = Arc::new(Mutex::new(Vec::new()));
+        let (feedback_tx, feedback_rx) = bounded::<Result<String, FlowError>>(1);
+        let feedback_results = Arc::new(Mutex::new(Vec::<Result<String, FlowError>>::new()));
         let feedback_results_clone = feedback_results.clone();
 
         tokio::spawn(async move {
@@ -260,7 +263,7 @@ mod flow_tests {
             }
         });
 
-        let flow: Flow<String, TestError, String> = Flow::new()
+        let flow: Flow<String, FlowError, String> = Flow::new()
             .source(ErrorSource {
                 feedback: feedback_tx,
             })
@@ -275,7 +278,7 @@ mod flow_tests {
         assert_eq!(feedback_results.len(), 1);
         assert!(matches!(
             &feedback_results[0],
-            Err(e) if e.to_string() == "Test error: Source error"
+            Err(e) if e.to_string() == "Source error: Source error"
         ));
         drop(feedback_results);
     }
@@ -285,7 +288,7 @@ mod flow_tests {
         init_tracing();
         info!("Starting return empty vec when no items processed test");
         // Given
-        let flow: Flow<String, TestError, String> = Flow::new().source(EmptySource);
+        let flow: Flow<String, FlowError, String> = Flow::new().source(EmptySource);
 
         // When
         let result = run_flow_with_timeout(flow, Duration::from_millis(100)).await;
@@ -300,8 +303,8 @@ mod flow_tests {
         init_tracing();
         info!("Starting add processor to stages test");
         // Given
-        let (feedback_tx, _) = bounded::<Result<String, TestError>>(1);
-        let flow = Flow::<String, TestError, String>::new()
+        let (feedback_tx, _) = bounded::<Result<String, FlowError>>(1);
+        let flow = Flow::<String, FlowError, String>::new()
             .source(TestSource {
                 data: "test".to_string(),
                 feedback: feedback_tx,
@@ -323,9 +326,9 @@ mod flow_tests {
         init_tracing();
         info!("Starting preserve source after setting test");
         // Given
-        let (feedback_tx, _) = bounded::<Result<String, TestError>>(1);
+        let (feedback_tx, _) = bounded::<Result<String, FlowError>>(1);
         let source_data = "test".to_string();
-        let flow = Flow::<String, TestError, String>::new().source(TestSource {
+        let flow = Flow::<String, FlowError, String>::new().source(TestSource {
             data: source_data.clone(),
             feedback: feedback_tx,
         });
@@ -345,8 +348,8 @@ mod flow_tests {
         init_tracing();
         info!("Starting handle source item with feedback test");
         // Given
-        let (feedback_tx, feedback_rx) = bounded::<Result<String, TestError>>(1);
-        let feedback_results = Arc::new(Mutex::new(Vec::new()));
+        let (feedback_tx, feedback_rx) = bounded::<Result<String, FlowError>>(1);
+        let feedback_results = Arc::new(Mutex::new(Vec::<Result<String, FlowError>>::new()));
         let feedback_results_clone = feedback_results.clone();
 
         tokio::spawn(async move {
@@ -357,7 +360,7 @@ mod flow_tests {
         });
 
         let test_data = "test_data".to_string();
-        let flow: Flow<String, TestError, String> = Flow::new()
+        let flow: Flow<String, FlowError, String> = Flow::new()
             .source(TestSource {
                 data: test_data.clone(),
                 feedback: feedback_tx, // Pass feedback channel to TestSource
@@ -397,7 +400,7 @@ mod flow_tests {
         tx.send(Ok("item2".to_string())).unwrap();
         drop(tx);
 
-        let flow: Flow<String, TestError, String> = Flow::new()
+        let flow: Flow<String, FlowError, String> = Flow::new()
             .source(MultiSource {
                 rx,
                 feedback: feedback_tx,
@@ -432,7 +435,7 @@ mod flow_tests {
         }
 
         // Run a flow with all components to generate tracing data
-        let (feedback_tx, _) = bounded::<Result<String, TestError>>(1);
+        let (feedback_tx, _) = bounded::<Result<String, FlowError>>(1);
         let test_condition = TestCondition; // Create instance first
         let flow = Flow::new()
             .source(TestSource {

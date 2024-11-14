@@ -1,31 +1,13 @@
+use cortex_ai::FlowError;
 use cortex_ai::{
-    composer::flow::FlowError, flow::types::SourceOutput, Condition, ConditionFuture, Flow,
-    FlowComponent, FlowFuture, Processor, Source,
+    flow::types::SourceOutput, Condition, ConditionFuture, Flow, FlowComponent, FlowFuture,
+    Processor, Source,
 };
 use flume::bounded;
 use std::error::Error;
-use std::fmt;
 use std::time::Duration;
 use tokio::sync::broadcast;
 use tracing_subscriber::EnvFilter;
-
-// Error Types
-#[derive(Debug, Clone)]
-pub struct TestError(pub String);
-
-impl fmt::Display for TestError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Test error: {}", self.0)
-    }
-}
-
-impl Error for TestError {}
-
-impl From<FlowError> for TestError {
-    fn from(error: FlowError) -> Self {
-        Self(error.to_string())
-    }
-}
 
 // Test Components
 #[derive(Debug, Clone)]
@@ -36,7 +18,7 @@ pub struct TestCondition;
 
 pub struct TestSource {
     pub data: String,
-    pub feedback: flume::Sender<Result<String, TestError>>,
+    pub feedback: flume::Sender<Result<String, FlowError>>,
 }
 
 #[derive(Clone)]
@@ -53,18 +35,18 @@ pub struct StreamErrorSource;
 pub struct SkipProcessor;
 
 pub struct ErrorSource {
-    pub feedback: flume::Sender<Result<String, TestError>>,
+    pub feedback: flume::Sender<Result<String, FlowError>>,
 }
 
 pub struct SkipSource {
-    pub feedback: flume::Sender<Result<String, TestError>>,
+    pub feedback: flume::Sender<Result<String, FlowError>>,
 }
 
 // Implementations
 impl FlowComponent for TestProcessor {
     type Input = String;
     type Output = String;
-    type Error = TestError;
+    type Error = FlowError;
 }
 
 impl Processor for TestProcessor {
@@ -76,7 +58,7 @@ impl Processor for TestProcessor {
 impl FlowComponent for TestCondition {
     type Input = String;
     type Output = String;
-    type Error = TestError;
+    type Error = FlowError;
 }
 
 impl Condition for TestCondition {
@@ -91,7 +73,7 @@ impl Condition for TestCondition {
 impl FlowComponent for TestSource {
     type Input = ();
     type Output = String;
-    type Error = TestError;
+    type Error = FlowError;
 }
 
 impl Source for TestSource {
@@ -114,7 +96,7 @@ impl Source for TestSource {
 impl FlowComponent for PassthroughProcessor {
     type Input = String;
     type Output = String;
-    type Error = TestError;
+    type Error = FlowError;
 }
 
 impl Processor for PassthroughProcessor {
@@ -126,19 +108,19 @@ impl Processor for PassthroughProcessor {
 impl FlowComponent for ErrorProcessor {
     type Input = String;
     type Output = String;
-    type Error = TestError;
+    type Error = FlowError;
 }
 
 impl Processor for ErrorProcessor {
     fn process(&self, _input: Self::Input) -> FlowFuture<'_, Self::Output, Self::Error> {
-        Box::pin(async move { Err(TestError("Processing failed".to_string())) })
+        Box::pin(async move { Err(FlowError::Process("Processing failed".to_string())) })
     }
 }
 
 impl FlowComponent for ErrorSource {
     type Input = ();
     type Output = String;
-    type Error = TestError;
+    type Error = FlowError;
 }
 
 impl Source for ErrorSource {
@@ -146,7 +128,8 @@ impl Source for ErrorSource {
         let feedback = self.feedback.clone();
         Box::pin(async move {
             let (tx, rx) = bounded(1);
-            tx.send(Err(TestError("Source error".to_string()))).unwrap();
+            tx.send(Err(FlowError::Source("Source error".to_string())))
+                .unwrap();
             drop(tx);
 
             Ok(SourceOutput {
@@ -160,19 +143,19 @@ impl Source for ErrorSource {
 impl FlowComponent for StreamErrorSource {
     type Input = ();
     type Output = String;
-    type Error = TestError;
+    type Error = FlowError;
 }
 
 impl Source for StreamErrorSource {
     fn stream(&self) -> FlowFuture<'_, SourceOutput<Self::Output, Self::Error>, Self::Error> {
-        Box::pin(async move { Err(TestError("Stream initialization error".to_string())) })
+        Box::pin(async move { Err(FlowError::Source("Stream initialization error".to_string())) })
     }
 }
 
 impl FlowComponent for SkipProcessor {
     type Input = String;
     type Output = String;
-    type Error = TestError;
+    type Error = FlowError;
 }
 
 impl Processor for SkipProcessor {
@@ -184,7 +167,7 @@ impl Processor for SkipProcessor {
 impl FlowComponent for SkipSource {
     type Input = ();
     type Output = String;
-    type Error = TestError;
+    type Error = FlowError;
 }
 
 impl Source for SkipSource {
@@ -206,7 +189,7 @@ impl Source for SkipSource {
 impl FlowComponent for EmptySource {
     type Input = ();
     type Output = String;
-    type Error = TestError;
+    type Error = FlowError;
 }
 
 impl Source for EmptySource {
