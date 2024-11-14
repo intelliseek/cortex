@@ -35,27 +35,21 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build cortex-ai
-        working-directory: ./cortex-ai
         run: just build
       
       - name: Run tests
-        working-directory: ./cortex-ai
         run: just test-ci
 
       - name: Run doctests
-        working-directory: ./cortex-ai
         run: just test-doc
         
       - name: Check formatting
-        working-directory: ./cortex-ai
         run: just fmt
         
       - name: Check linting
-        working-directory: ./cortex-ai
         run: just lint
         
       - name: Generate coverage report
-        working-directory: ./cortex-ai
         run: just coverage
 
       - name: Upload results to Codecov
@@ -74,8 +68,33 @@ jobs:
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@nightly
+
+      - name: Get build number
+        id: build_number
+        run: echo "::set-output name=number::${{ github.run_number }}"
+        
+      - name: Update cortex-ai version
+        run: |
+          VERSION="0.1.${{ steps.build_number.outputs.number }}"
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" cortex-ai/Cargo.toml
+          
+      - name: Update cortex-sources version
+        run: |
+          VERSION="0.1.${{ steps.build_number.outputs.number }}"
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" cortex-sources/Cargo.toml
+          # Update cortex-ai dependency version
+          sed -i "s/cortex-ai = { path = \"..\/cortex-ai\", version = \".*\" }/cortex-ai = { path = \"..\/cortex-ai\", version = \"$VERSION\" }/" cortex-sources/Cargo.toml
         
       - name: Publish cortex-ai
         run: cargo publish -p cortex-ai --token ${CRATES_TOKEN}
+        env:
+          CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
+
+      # Wait a bit for crates.io to process the cortex-ai publish
+      - name: Wait for crates.io
+        run: sleep 30
+
+      - name: Publish cortex-sources
+        run: cargo publish -p cortex-sources --token ${CRATES_TOKEN}
         env:
           CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
