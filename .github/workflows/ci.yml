@@ -86,7 +86,7 @@ jobs:
           sed -i "s/cortex-ai = { path = \"..\/cortex-ai\", version = \".*\" }/cortex-ai = { path = \"..\/cortex-ai\", version = \"$VERSION\" }/" cortex-sources/Cargo.toml
         
       - name: Publish cortex-ai
-        run: cargo publish -p cortex-ai --token ${CRATES_TOKEN}
+        run: cargo publish -p cortex-ai --token ${CRATES_TOKEN} --allow-dirty
         env:
           CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
 
@@ -95,6 +95,6 @@ jobs:
         run: sleep 30
 
       - name: Publish cortex-sources
-        run: cargo publish -p cortex-sources --token ${CRATES_TOKEN}
+        run: cargo publish -p cortex-sources --token ${CRATES_TOKEN} --allow-dirty
         env:
           CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
