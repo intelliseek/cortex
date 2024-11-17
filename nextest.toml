@@ -1,0 +1,4 @@
+[profile.default]
+slow-timeout = { period = "5s", terminate-after = 1 }
+retries = { backoff = "exponential", count = 5, delay = "2s", jitter = true, max-delay = "10s" }
+fail-fast = false

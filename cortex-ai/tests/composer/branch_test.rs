@@ -1,5 +1,5 @@
 use crate::helpers::{
-    init_tracing, run_flow_with_timeout, TestCondition, TestProcessor, TestSource,
+    init_tracing, run_flow_with_timeout, TestCondition, TestProcessor, TestSink, TestSource,
 };
 use cortex_ai::{Condition, ConditionFuture, Flow, FlowComponent};
 use flume::bounded;
@@ -41,7 +41,8 @@ mod branch_builder_tests {
             .process(TestProcessor)
             .otherwise()
             .process(TestProcessor)
-            .end();
+            .end()
+            .sink(TestSink);
 
         // When
         let result = run_flow_with_timeout(flow, Duration::from_millis(100))
@@ -68,7 +69,8 @@ mod branch_builder_tests {
             .process(TestProcessor)
             .otherwise()
             .process(TestProcessor)
-            .end();
+            .end()
+            .sink(TestSink);
 
         // When
         let result = run_flow_with_timeout(flow, Duration::from_millis(100))
@@ -95,7 +97,8 @@ mod branch_builder_tests {
             .process(TestProcessor)
             .otherwise()
             .process(TestProcessor)
-            .end();
+            .end()
+            .sink(TestSink);
 
         // When
         let result = run_flow_with_timeout(flow, Duration::from_millis(100)).await;

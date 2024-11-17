@@ -1,5 +1,6 @@
 use super::condition::Condition;
 use super::processor::Processor;
+use super::sink::Sink;
 use std::marker::PhantomData;
 
 pub enum Stage<DataType, ErrorType, OutputType> {
@@ -7,6 +8,9 @@ pub enum Stage<DataType, ErrorType, OutputType> {
         Box<dyn Processor<Input = DataType, Output = DataType, Error = ErrorType> + Send + Sync>,
     ),
     Branch(Box<BranchStage<DataType, ErrorType, OutputType>>),
+    Sink(
+        Box<dyn Sink<Input = DataType, Output = DataType, Error = ErrorType> + Send + Sync>,
+    ),
 }
 
 pub struct BranchStage<DataType, ErrorType, OutputType> {

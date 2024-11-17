@@ -1,6 +1,12 @@
 use super::BranchBuilder;
 use crate::{
-    flow::{condition::Condition, processor::Processor, source::Source, stage::Stage},
+    flow::{
+        condition::Condition,
+        processor::Processor,
+        sink::Sink,
+        source::Source,
+        stage::{BranchStage, Stage},
+    },
     FlowError,
 };
 use std::{error::Error, sync::Arc};
@@ -116,6 +122,7 @@ pub struct Flow<DataType, ErrorType, OutputType> {
     pub(crate) source:
         Option<Box<dyn Source<Input = (), Output = DataType, Error = ErrorType> + Send + Sync>>,
     pub(crate) stages: Vec<Stage<DataType, ErrorType, OutputType>>,
+    pub(crate) has_sink: bool,
 }
 
 impl<DataType, ErrorType, OutputType> Flow<DataType, ErrorType, OutputType>
@@ -134,6 +141,7 @@ where
         Self {
             source: None,
             stages: Vec::new(),
+            has_sink: false,
         }
     }
 
@@ -152,6 +160,9 @@ where
         SourceType:
             Source<Input = (), Output = DataType, Error = ErrorType> + Send + Sync + 'static,
     {
+        if !self.stages.is_empty() {
+            panic!("Source must be the first component in a flow");
+        }
         self.source = Some(Box::new(source));
         self
     }
@@ -173,6 +184,12 @@ where
             + Sync
             + 'static,
     {
+        if self.source.is_none() {
+            panic!("Flow must start with a source");
+        }
+        if self.has_sink {
+            panic!("Cannot add processor after sink - sink must be the last component");
+        }
         self.stages.push(Stage::Process(Box::new(processor)));
         self
     }
@@ -197,46 +214,183 @@ where
             + Sync
             + 'static,
     {
+        if self.source.is_none() {
+            panic!("Flow must start with a source");
+        }
+        if self.has_sink {
+            panic!("Cannot add condition after sink - sink must be the last component");
+        }
         BranchBuilder::new(Box::new(condition), self)
     }
 
-    /// Executes the flow asynchronously, processing data from the source through all stages.
+    /// Adds a sink stage to the flow.
     ///
     /// # Arguments
     ///
-    /// * `shutdown` - A broadcast receiver for graceful shutdown signaling
+    /// * `sink` - The sink to add to the flow
     ///
     /// # Returns
     ///
-    /// A Result containing either a vector of processed data items or an error
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// * The flow source is not set
-    /// * Any stage in the flow returns an error during processing
-    /// * The task execution fails
+    /// The flow builder for method chaining
+    #[must_use]
+    pub fn sink<SinkType>(mut self, sink: SinkType) -> Self
+    where
+        SinkType:
+            Sink<Input = DataType, Output = DataType, Error = ErrorType> + Send + Sync + 'static,
+    {
+        if self.source.is_none() {
+            panic!("Flow must start with a source");
+        }
+        if self.stages.is_empty() {
+            panic!("Flow must have at least one processor or condition before sink");
+        }
+        if self.has_sink {
+            panic!("Flow already has a sink component");
+        }
+        self.stages.push(Stage::Sink(Box::new(sink)));
+        self.has_sink = true;
+        self
+    }
+
+    // Single Responsibility: Validate flow configuration
+    fn validate(&self) -> Result<(), ErrorType> {
+        if self.source.is_none() {
+            return Err(ErrorType::from(FlowError::NoSource));
+        }
+        if !self.has_sink {
+            return Err(ErrorType::from(FlowError::NoSink));
+        }
+        Ok(())
+    }
+
+    // Single Responsibility: Process a single item through stages
+    async fn process_item(
+        item: DataType,
+        stages: &[Stage<DataType, ErrorType, OutputType>],
+        context: &ProcessingContext<DataType, ErrorType>,
+    ) -> Result<DataType, ErrorType> {
+        let mut current = item;
+        for stage in stages {
+            current = Self::execute_stage(current, stage, context).await?;
+        }
+        Ok(current)
+    }
+
+    // Single Responsibility: Execute a single stage
+    async fn execute_stage(
+        input: DataType,
+        stage: &Stage<DataType, ErrorType, OutputType>,
+        context: &ProcessingContext<DataType, ErrorType>,
+    ) -> Result<DataType, ErrorType> {
+        match stage {
+            Stage::Process(processor) => Self::execute_processor(input, processor, context).await,
+            Stage::Sink(sink) => Self::execute_sink(input, sink, context).await,
+            Stage::Branch(branch) => Self::execute_branch(input, branch, context).await,
+        }
+    }
+
+    // Single Responsibility: Execute a processor
+    async fn execute_processor(
+        input: DataType,
+        processor: &Box<dyn Processor<Input = DataType, Output = DataType, Error = ErrorType> + Send + Sync>,
+        context: &ProcessingContext<DataType, ErrorType>,
+    ) -> Result<DataType, ErrorType> {
+        debug!("Executing processor stage");
+        let result = processor.process(input).await;
+        // Only send feedback for errors
+        if let Err(ref e) = result {
+            let _ = context.send_feedback(Err(e.clone()));
+        }
+        result
+    }
+
+    // Single Responsibility: Execute a sink
+    async fn execute_sink(
+        input: DataType,
+        sink: &Box<dyn Sink<Input = DataType, Output = DataType, Error = ErrorType> + Send + Sync>,
+        context: &ProcessingContext<DataType, ErrorType>,
+    ) -> Result<DataType, ErrorType> {
+        debug!("Executing sink stage");
+        let result = sink.sink(input).await;
+        // Send feedback before returning error
+        let _ = context.send_feedback(result.clone());
+        // Wait a bit to ensure feedback is processed
+        if result.is_err() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        result
+    }
+
+    // Single Responsibility: Execute a branch
+    async fn execute_branch(
+        input: DataType,
+        branch: &BranchStage<DataType, ErrorType, OutputType>,
+        context: &ProcessingContext<DataType, ErrorType>,
+    ) -> Result<DataType, ErrorType> {
+        debug!("Evaluating branch condition");
+        let (condition_met, _) = Self::evaluate_condition(&input, &branch.condition, context).await?;
+        
+        let stages = if condition_met {
+            debug!("Taking then branch");
+            &branch.then_branch
+        } else {
+            debug!("Taking else branch");
+            &branch.else_branch
+        };
+
+        // Process stages iteratively
+        let mut current = input;
+        for stage in stages {
+            current = match stage {
+                Stage::Process(processor) => {
+                    Self::execute_processor(current, processor, context).await?
+                }
+                Stage::Sink(sink) => {
+                    Self::execute_sink(current, sink, context).await?
+                }
+                Stage::Branch(_) => {
+                    warn!("Nested branches are not supported");
+                    current
+                }
+            };
+        }
+        Ok(current)
+    }
+
+    // Single Responsibility: Evaluate a condition
+    async fn evaluate_condition(
+        input: &DataType,
+        condition: &Box<
+            dyn Condition<Input = DataType, Output = OutputType, Error = ErrorType> + Send + Sync,
+        >,
+        context: &ProcessingContext<DataType, ErrorType>,
+    ) -> Result<(bool, Option<OutputType>), ErrorType> {
+        let result = condition.evaluate(input.clone()).await;
+        if let Err(ref e) = result {
+            let _ = context.send_feedback(Err(e.clone()));
+        }
+        result
+    }
+
+    // Main entry point
     #[instrument(skip(self))]
     pub async fn run_stream(
         mut self,
         shutdown: broadcast::Receiver<()>,
     ) -> Result<Vec<DataType>, ErrorType> {
         info!("Starting flow execution");
-        let source = self.source.take().ok_or_else(|| {
-            error!("Flow source not set");
-            ErrorType::from(FlowError::NoSource)
-        })?;
+        self.validate()?;
 
-        debug!("Initializing source stream");
+        let source = self.source.take().unwrap();
         let source_output = source.stream().await?;
-        let receiver = source_output.receiver;
-        let feedback = source_output.feedback;
-        let mut results = Vec::new();
-        let mut shutdown_rx = shutdown;
-        let mut handles = Vec::new();
+
+        let context = ProcessingContext {
+            feedback: source_output.feedback,
+        };
 
         let stages = Arc::new(self.stages);
-        info!("Starting message processing loop");
+        let mut results = Vec::new();
+        let mut shutdown_rx = shutdown;
 
         loop {
             tokio::select! {
@@ -244,102 +398,57 @@ where
                     warn!("Received shutdown signal");
                     break;
                 }
-                item = receiver.recv_async() => {
-                    if let Ok(item) = item {
-                        let feedback = feedback.clone();
-                        let stages = Arc::clone(&stages);
-
-                        debug!("Spawning task for data processing");
-                        let handle = tokio::spawn(async move {
-                            let mut current_item = match item {
-                                Ok(data) => {
-                                    debug!("Processing new item");
-                                    data
-                                },
+                item = source_output.receiver.recv_async() => {
+                    match item {
+                        Ok(Ok(data)) => {
+                            let stages = Arc::clone(&stages);
+                            let context = context.clone();
+                            match Self::process_item(data, &stages, &context).await {
+                                Ok(processed) => {
+                                    // Don't send feedback here - only sinks send success feedback
+                                    results.push(processed);
+                                }
                                 Err(e) => {
-                                    error!("Source error: {:?}", e);
-                                    let _ = feedback.send(Err(e.clone()));
+                                    error!("Processing error: {:?}", e);
+                                    let _ = context.send_feedback(Err(e.clone()));
                                     return Err(e);
                                 }
-                            };
-
-                            for stage in stages.iter() {
-                                match stage {
-                                    Stage::Process(processor) => {
-                                        debug!("Executing processor stage");
-                                        current_item = match processor.process(current_item).await {
-                                            Ok(data) => data,
-                                            Err(e) => {
-                                                error!("Processor error: {:?}", e);
-                                                let _ = feedback.send(Err(e.clone()));
-                                                return Err(e);
-                                            }
-                                        };
-                                    }
-                                    Stage::Branch(branch) => {
-                                        debug!("Evaluating branch condition");
-                                        let (condition_met, _) = match branch.condition.evaluate(current_item.clone()).await {
-                                            Ok(result) => result,
-                                            Err(e) => {
-                                                error!("Branch condition error: {:?}", e);
-                                                let _ = feedback.send(Err(e.clone()));
-                                                return Err(e);
-                                            }
-                                        };
-
-                                        let stages = if condition_met {
-                                            debug!("Taking then branch");
-                                            &branch.then_branch
-                                        } else {
-                                            debug!("Taking else branch");
-                                            &branch.else_branch
-                                        };
-
-                                        for stage in stages {
-                                            if let Stage::Process(processor) = stage {
-                                                current_item = match processor.process(current_item).await {
-                                                    Ok(data) => data,
-                                                    Err(e) => {
-                                                        error!("Branch processor error: {:?}", e);
-                                                        let _ = feedback.send(Err(e.clone()));
-                                                        return Err(e);
-                                                    }
-                                                };
-                                            }
-                                        }
-                                    }
-                                }
                             }
-                            debug!("Data processing completed successfully");
-                            let _ = feedback.send(Ok(current_item.clone()));
-                            Ok(current_item)
-                        });
-                        handles.push(handle);
-                    } else {
-                        debug!("Source channel closed");
-                        break;
+                        }
+                        Ok(Err(e)) => {
+                            error!("Source error: {:?}", e);
+                            let _ = context.send_feedback(Err(e.clone()));
+                            return Err(e);
+                        }
+                        Err(_) => {
+                            debug!("Source channel closed");
+                            break;
+                        }
                     }
-                }
-            }
-        }
-
-        debug!("Collecting results from all tasks");
-        for handle in handles {
-            match handle.await {
-                Ok(Ok(result)) => results.push(result),
-                Ok(Err(e)) => {
-                    error!("Task error: {:?}", e);
-                    return Err(e);
-                }
-                Err(e) => {
-                    error!("Task join error: {:?}", e);
-                    return Err(ErrorType::from(FlowError::Custom(e.to_string())));
                 }
             }
         }
 
         debug!("Flow execution completed successfully");
         Ok(results)
+    }
+}
+
+// Context for processing operations
+#[derive(Clone)]
+struct ProcessingContext<DataType, ErrorType> {
+    feedback: flume::Sender<Result<DataType, ErrorType>>,
+}
+
+impl<DataType, ErrorType> ProcessingContext<DataType, ErrorType>
+where
+    DataType: Clone + Send + Sync + 'static,
+    ErrorType: std::error::Error + Send + Sync + Clone + 'static,
+{
+    fn send_feedback(&self, result: Result<DataType, ErrorType>) {
+        if let Err(e) = self.feedback.send(result) {
+            error!("Failed to send feedback: {}", e);
+        }
     }
 }
 

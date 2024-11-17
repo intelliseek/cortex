@@ -8,6 +8,7 @@ pub use error::FlowError;
 pub use flow::component::FlowComponent;
 pub use flow::condition::Condition;
 pub use flow::processor::Processor;
+pub use flow::sink::Sink;
 pub use flow::source::Source;
 pub use flow::stage::Stage;
 pub use flow::types::{ConditionFuture, FlowFuture};

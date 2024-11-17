@@ -14,17 +14,17 @@ build:
 
 # Run tests with nextest
 test:
-    cargo nextest run
+    cargo nextest --config-file nextest.toml run
 
 test-ci:
-    cargo nextest run --profile ci  
+    cargo nextest --config-file nextest.toml run --profile ci  
 
 test-doc:
     cargo test --doc --package cortex-ai -- --show-output 
 
 # Run tests with coverage
 coverage:
-    cargo llvm-cov nextest --lcov --output-path target/llvm-cov-target/lcov.info --package cortex-ai
+    cargo llvm-cov nextest --config-file nextest.toml --lcov --output-path target/llvm-cov-target/lcov.info --package cortex-ai
     @echo "Coverage report generated in target/llvm-cov-target/lcov.info"
 
 # Run benchmarks

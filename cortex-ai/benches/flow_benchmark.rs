@@ -106,6 +106,12 @@ impl Source for QueueSource {
             })
         })
     }
+
+    fn on_feedback(&self, result: Result<Self::Output, Self::Error>) {
+        if result.is_ok() {
+            self.processed_count.fetch_add(1, Ordering::SeqCst);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

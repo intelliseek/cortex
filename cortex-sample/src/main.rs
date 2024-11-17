@@ -1,5 +1,5 @@
 use cortex_ai::{
-    Condition, ConditionFuture, Flow, FlowComponent, FlowError, FlowFuture, Processor,
+    Condition, ConditionFuture, Flow, FlowComponent, FlowError, FlowFuture, Processor, Sink,
 };
 use cortex_sources::kafka::{KafkaConfig, KafkaSource};
 use serde::{Deserialize, Serialize};
@@ -126,6 +126,25 @@ where
     }
 }
 
+// Implement a simple sink
+struct PrintSink;
+
+impl FlowComponent for PrintSink {
+    type Input = ClickBehavior;
+    type Output = ClickBehavior;
+    type Error = FlowError;
+}
+
+impl Sink for PrintSink {
+    fn sink(&self, input: Self::Input) -> FlowFuture<'_, Self::Output, Self::Error> {
+        println!(
+            "Consumed event - User: {}, Event: {}, Session: {}",
+            input.user_id, input.event_type, input.session_id
+        );
+        Box::pin(async move { Ok(input) })
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // Configure Kafka source
@@ -163,7 +182,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             |click: &ClickBehavior| click.event_type.clone(),
             "view".to_string(),
         ))
-        .end();
+        .end()
+        .sink(PrintSink);
 
     // Run the flow
     let handle = tokio::spawn(async move {

@@ -7,6 +7,8 @@ pub enum FlowError {
     Process(String),
     Condition(String),
     NoSource,
+    NoSink,
+    Sink(String),
     Custom(String),
 }
 
@@ -17,6 +19,8 @@ impl fmt::Display for FlowError {
             Self::Process(msg) => write!(f, "Process error: {msg}"),
             Self::Condition(msg) => write!(f, "Condition error: {msg}"),
             Self::NoSource => write!(f, "Flow error: No source configured"),
+            Self::NoSink => write!(f, "Flow error: No sink configured"),
+            Self::Sink(msg) => write!(f, "Sink error: {msg}"),
             Self::Custom(msg) => write!(f, "Flow error: {msg}"),
         }
     }

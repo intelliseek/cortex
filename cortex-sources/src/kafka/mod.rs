@@ -167,4 +167,12 @@ where
             })
         })
     }
+
+    fn on_feedback(&self, result: Result<Self::Output, Self::Error>) {
+        if result.is_ok() {
+            if let Err(e) = self.consumer.commit_consumer_state(rdkafka::consumer::CommitMode::Async) {
+                tracing::error!("Failed to commit offsets in feedback handler: {}", e);
+            }
+        }
+    }
 }

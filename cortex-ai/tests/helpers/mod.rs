@@ -1,13 +1,15 @@
 use cortex_ai::FlowError;
 use cortex_ai::{
     flow::types::SourceOutput, Condition, ConditionFuture, Flow, FlowComponent, FlowFuture,
-    Processor, Source,
+    Processor, Sink, Source,
 };
 use flume::bounded;
+use tracing::info;
 use std::error::Error;
 use std::time::Duration;
 use tokio::sync::broadcast;
 use tracing_subscriber::EnvFilter;
+use std::sync::Arc;
 
 // Test Components
 #[derive(Debug, Clone)]
@@ -41,6 +43,8 @@ pub struct ErrorSource {
 pub struct SkipSource {
     pub feedback: flume::Sender<Result<String, FlowError>>,
 }
+
+pub struct TestSink;
 
 // Implementations
 impl FlowComponent for TestProcessor {
@@ -91,6 +95,10 @@ impl Source for TestSource {
             })
         })
     }
+
+    fn on_feedback(&self, result: Result<Self::Output, Self::Error>) {
+        info!("Source feedback received: {:?}", result);
+    }
 }
 
 impl FlowComponent for PassthroughProcessor {
@@ -138,6 +146,10 @@ impl Source for ErrorSource {
             })
         })
     }
+
+    fn on_feedback(&self, result: Result<Self::Output, Self::Error>) {
+        info!("Source feedback received: {:?}", result);
+    }
 }
 
 impl FlowComponent for StreamErrorSource {
@@ -149,6 +161,10 @@ impl FlowComponent for StreamErrorSource {
 impl Source for StreamErrorSource {
     fn stream(&self) -> FlowFuture<'_, SourceOutput<Self::Output, Self::Error>, Self::Error> {
         Box::pin(async move { Err(FlowError::Source("Stream initialization error".to_string())) })
+    }
+
+    fn on_feedback(&self, result: Result<Self::Output, Self::Error>) {
+        info!("Source feedback received: {:?}", result);
     }
 }
 
@@ -184,6 +200,10 @@ impl Source for SkipSource {
             })
         })
     }
+
+    fn on_feedback(&self, result: Result<Self::Output, Self::Error>) {
+        info!("Source feedback received: {:?}", result);
+    }
 }
 
 impl FlowComponent for EmptySource {
@@ -217,6 +237,22 @@ impl Source for EmptySource {
             })
         })
     }
+
+    fn on_feedback(&self, result: Result<Self::Output, Self::Error>) {
+        info!("Source feedback received: {:?}", result);
+    }
+}
+
+impl FlowComponent for TestSink {
+    type Input = String;
+    type Output = String;
+    type Error = FlowError;
+}
+
+impl Sink for TestSink {
+    fn sink(&self, input: Self::Input) -> FlowFuture<'_, Self::Output, Self::Error> {
+        Box::pin(async move { Ok(input) })
+    }
 }
 
 // Helper Functions
@@ -230,13 +266,23 @@ where
     ErrorType: Error + Send + Sync + Clone + 'static + From<FlowError>,
 {
     let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+    let shutdown_tx = Arc::new(shutdown_tx);
+    let shutdown_tx_clone = Arc::clone(&shutdown_tx);
 
-    let handle = tokio::spawn(async move { flow.run_stream(shutdown_rx).await });
+    let handle = tokio::spawn(async move { 
+        let result = flow.run_stream(shutdown_rx).await;
+        // Ensure we return before timeout if we have a result
+        shutdown_tx_clone.send(()).ok();
+        result
+    });
 
-    tokio::time::sleep(timeout).await;
-    let _ = shutdown_tx.send(());
-
-    handle.await.unwrap()
+    tokio::select! {
+        _ = tokio::time::sleep(timeout) => {
+            // Send shutdown signal and wait for handle
+            shutdown_tx.send(()).ok();
+            handle.await.unwrap()
+        }
+    }
 }
 
 // Add this function to initialize tracing for tests
