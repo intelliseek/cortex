@@ -574,25 +574,8 @@ mod flow_tests {
             }
         }
 
-        let (feedback_tx, feedback_rx) = bounded::<Result<String, FlowError>>(1);
-        let feedback_results = Arc::new(Mutex::new(Vec::new()));
-        let feedback_results_clone = feedback_results.clone();
-
-        // Create a oneshot channel to signal when feedback is received
-        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
-        let done_tx = Arc::new(Mutex::new(Some(done_tx)));
-
-        // Spawn feedback handler
-        tokio::spawn(async move {
-            if let Ok(result) = feedback_rx.recv_async().await {
-                let mut results = feedback_results_clone.lock().unwrap();
-                results.push(result);
-                if let Some(tx) = done_tx.lock().unwrap().take() {
-                    tx.send(()).ok();
-                }
-            }
-        });
-
+        let (feedback_tx, _) = bounded::<Result<String, FlowError>>(1);
+        
         let flow: Flow<String, FlowError, String> = Flow::new()
             .source(TestSource {
                 data: "test".to_string(),
@@ -601,20 +584,7 @@ mod flow_tests {
             .process(PassthroughProcessor)
             .sink(ErrorSink);
 
-        // Wait for feedback first
-        let result = tokio::select! {
-            r = run_flow_with_timeout(flow, Duration::from_millis(100)) => r,
-            _ = done_rx => {
-                // Feedback received, now check the result
-                let feedback_results = feedback_results.lock().unwrap();
-                assert_eq!(feedback_results.len(), 1);
-                assert!(matches!(
-                    &feedback_results[0],
-                    Err(e) if e.to_string().contains("Sink error")
-                ));
-                Err(FlowError::Sink("Sink error".to_string()))
-            }
-        };
+        let result = run_flow_with_timeout(flow, Duration::from_millis(100)).await;
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Sink error"));

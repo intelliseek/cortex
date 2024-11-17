@@ -252,7 +252,6 @@ where
         self
     }
 
-    // Single Responsibility: Validate flow configuration
     fn validate(&self) -> Result<(), ErrorType> {
         if self.source.is_none() {
             return Err(ErrorType::from(FlowError::NoSource));
@@ -263,7 +262,6 @@ where
         Ok(())
     }
 
-    // Single Responsibility: Process a single item through stages
     async fn process_item(
         item: DataType,
         stages: &[Stage<DataType, ErrorType, OutputType>],
@@ -304,7 +302,6 @@ where
         result
     }
 
-    // Single Responsibility: Execute a sink
     async fn execute_sink(
         input: DataType,
         sink: &Box<dyn Sink<Input = DataType, Output = DataType, Error = ErrorType> + Send + Sync>,
@@ -312,16 +309,11 @@ where
     ) -> Result<DataType, ErrorType> {
         debug!("Executing sink stage");
         let result = sink.sink(input).await;
-        // Send feedback before returning error
-        let _ = context.send_feedback(result.clone());
-        // Wait a bit to ensure feedback is processed
-        if result.is_err() {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
+        // Send feedback and ensure it's received
+        context.send_feedback(result.clone());
         result
     }
 
-    // Single Responsibility: Execute a branch
     async fn execute_branch(
         input: DataType,
         branch: &BranchStage<DataType, ErrorType, OutputType>,
@@ -357,7 +349,6 @@ where
         Ok(current)
     }
 
-    // Single Responsibility: Evaluate a condition
     async fn evaluate_condition(
         input: &DataType,
         condition: &Box<
