@@ -1,0 +1,17 @@
+[package]
+name = "cortex-sinks"
+version = "0.1.0"
+authors = ["canavar <abdulkadiryaman@gmail.com>"]
+description = "Ready-made sink implementations for the cortex-ai processing framework"
+documentation = "https://docs.rs/cortex-sinks"
+repository = "https://github.com/intelliseek/cortex"
+readme = "README.md"
+license = "Apache-2.0"
+edition = "2021"
+
+[dependencies]
+cortex-ai = { path = "../cortex-ai", version = "0.1.0" }
+tokio = { version = "1.0", features = ["full"] }
+tracing = "0.1"
+thiserror = "1.0"
+async-trait = "0.1" 

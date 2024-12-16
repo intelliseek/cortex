@@ -11,7 +11,7 @@ use crate::{
 };
 use std::{error::Error, sync::Arc};
 use tokio::sync::broadcast;
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, info, warn};
 
 /// A builder for constructing and executing data processing flows.
 ///
@@ -32,6 +32,7 @@ use tracing::{debug, error, info, instrument, warn};
 /// use cortex_ai::flow::types::SourceOutput;
 /// use cortex_ai::flow::condition::Condition;
 /// use cortex_ai::flow::processor::Processor;
+/// use cortex_ai::flow::sink::Sink;
 /// use cortex_ai::FlowComponent;
 /// use cortex_ai::FlowError;
 /// use std::error::Error;
@@ -74,6 +75,10 @@ use tracing::{debug, error, info, instrument, warn};
 ///             Ok(SourceOutput { receiver: rx, feedback: feedback_tx })
 ///         })
 ///     }
+///
+///     fn on_feedback(&self, _result: Result<Self::Output, Self::Error>) {
+///         // Handle feedback
+///     }
 /// }
 ///
 /// struct MyProcessor;
@@ -89,16 +94,16 @@ use tracing::{debug, error, info, instrument, warn};
 ///     }
 /// }
 ///
-/// struct MyCondition;
-/// impl FlowComponent for MyCondition {
+/// struct MySink;
+/// impl FlowComponent for MySink {
 ///     type Input = MyData;
-///     type Output = bool;
+///     type Output = MyData;
 ///     type Error = MyError;
 /// }
 ///
-/// impl Condition for MyCondition {
-///     fn evaluate(&self, input: Self::Input) -> Pin<Box<dyn Future<Output = Result<(bool, Option<Self::Output>), Self::Error>> + Send>> {
-///         Box::pin(async move { Ok((true, Some(false))) })
+/// impl Sink for MySink {
+///     fn sink(&self, input: Self::Input) -> Pin<Box<dyn Future<Output = Result<Self::Output, Self::Error>> + Send>> {
+///         Box::pin(async move { Ok(input) })
 ///     }
 /// }
 ///
@@ -109,18 +114,20 @@ use tracing::{debug, error, info, instrument, warn};
 ///     let flow = Flow::<MyData, MyError, bool>::new()
 ///         .source(MySource)
 ///         .process(MyProcessor)
-///         .when(MyCondition)
-///         .process(MyProcessor)
-///         .otherwise()
-///         .process(MyProcessor)
-///         .end();
+///         .sink(MySink);
 ///
 ///     let _ = flow.run_stream(shutdown_rx).await;
 /// }
 /// ```
-pub struct Flow<DataType, ErrorType, OutputType> {
+#[derive(Clone)]
+pub struct Flow<DataType, ErrorType, OutputType>
+where
+    DataType: Clone + Send + Sync + 'static,
+    ErrorType: Error + Send + Sync + Clone + 'static,
+    OutputType: Send + Sync + Clone + 'static,
+{
     pub(crate) source:
-        Option<Box<dyn Source<Input = (), Output = DataType, Error = ErrorType> + Send + Sync>>,
+        Option<Arc<dyn Source<Input = (), Output = DataType, Error = ErrorType> + Send + Sync>>,
     pub(crate) stages: Vec<Stage<DataType, ErrorType, OutputType>>,
     pub(crate) has_sink: bool,
 }
@@ -128,7 +135,7 @@ pub struct Flow<DataType, ErrorType, OutputType> {
 impl<DataType, ErrorType, OutputType> Flow<DataType, ErrorType, OutputType>
 where
     DataType: Clone + Send + Sync + 'static,
-    OutputType: Send + Sync + 'static,
+    OutputType: Send + Sync + Clone + 'static,
     ErrorType: Error + Send + Sync + Clone + 'static + From<FlowError>,
 {
     /// Creates a new empty Flow.
@@ -161,9 +168,9 @@ where
             Source<Input = (), Output = DataType, Error = ErrorType> + Send + Sync + 'static,
     {
         if !self.stages.is_empty() {
-            panic!("Source must be the first component in a flow");
+            panic!("Source must be the first component");
         }
-        self.source = Some(Box::new(source));
+        self.source = Some(Arc::new(source));
         self
     }
 
@@ -184,13 +191,13 @@ where
             + Sync
             + 'static,
     {
-        if self.source.is_none() {
-            panic!("Flow must start with a source");
+        if self.source.is_none() && !self.stages.is_empty() {
+            panic!("Source must be the first component");
         }
         if self.has_sink {
             panic!("Cannot add processor after sink - sink must be the last component");
         }
-        self.stages.push(Stage::Process(Box::new(processor)));
+        self.stages.push(Stage::Process(Arc::new(processor)));
         self
     }
 
@@ -212,6 +219,7 @@ where
         ConditionType: Condition<Input = DataType, Output = OutputType, Error = ErrorType>
             + Send
             + Sync
+            + Clone
             + 'static,
     {
         if self.source.is_none() {
@@ -247,7 +255,7 @@ where
         if self.has_sink {
             panic!("Flow already has a sink component");
         }
-        self.stages.push(Stage::Sink(Box::new(sink)));
+        self.stages.push(Stage::Sink(Arc::new(sink)));
         self.has_sink = true;
         self
     }
@@ -290,21 +298,23 @@ where
     // Single Responsibility: Execute a processor
     async fn execute_processor(
         input: DataType,
-        processor: &Box<dyn Processor<Input = DataType, Output = DataType, Error = ErrorType> + Send + Sync>,
+        processor: &Arc<
+            dyn Processor<Input = DataType, Output = DataType, Error = ErrorType> + Send + Sync,
+        >,
         context: &ProcessingContext<DataType, ErrorType>,
     ) -> Result<DataType, ErrorType> {
         debug!("Executing processor stage");
         let result = processor.process(input).await;
         // Only send feedback for errors
         if let Err(ref e) = result {
-            let _ = context.send_feedback(Err(e.clone()));
+            context.send_feedback(Err(e.clone()));
         }
         result
     }
 
     async fn execute_sink(
         input: DataType,
-        sink: &Box<dyn Sink<Input = DataType, Output = DataType, Error = ErrorType> + Send + Sync>,
+        sink: &Arc<dyn Sink<Input = DataType, Output = DataType, Error = ErrorType> + Send + Sync>,
         context: &ProcessingContext<DataType, ErrorType>,
     ) -> Result<DataType, ErrorType> {
         debug!("Executing sink stage");
@@ -320,8 +330,9 @@ where
         context: &ProcessingContext<DataType, ErrorType>,
     ) -> Result<DataType, ErrorType> {
         debug!("Evaluating branch condition");
-        let (condition_met, _) = Self::evaluate_condition(&input, &branch.condition, context).await?;
-        
+        let (condition_met, _) =
+            Self::evaluate_condition(&input, &branch.condition, context).await?;
+
         let stages = if condition_met {
             debug!("Taking then branch");
             &branch.then_branch
@@ -337,9 +348,7 @@ where
                 Stage::Process(processor) => {
                     Self::execute_processor(current, processor, context).await?
                 }
-                Stage::Sink(sink) => {
-                    Self::execute_sink(current, sink, context).await?
-                }
+                Stage::Sink(sink) => Self::execute_sink(current, sink, context).await?,
                 Stage::Branch(_) => {
                     warn!("Nested branches are not supported");
                     current
@@ -351,7 +360,7 @@ where
 
     async fn evaluate_condition(
         input: &DataType,
-        condition: &Box<
+        condition: &Arc<
             dyn Condition<Input = DataType, Output = OutputType, Error = ErrorType> + Send + Sync,
         >,
         context: &ProcessingContext<DataType, ErrorType>,
@@ -364,7 +373,6 @@ where
     }
 
     // Main entry point
-    #[instrument(skip(self))]
     pub async fn run_stream(
         mut self,
         shutdown: broadcast::Receiver<()>,
@@ -446,7 +454,7 @@ where
 impl<DataType, ErrorType, OutputType> Default for Flow<DataType, ErrorType, OutputType>
 where
     DataType: Clone + Send + Sync + 'static,
-    OutputType: Send + Sync + 'static,
+    OutputType: Send + Sync + Clone + 'static,
     ErrorType: Error + Send + Sync + Clone + 'static + From<FlowError>,
 {
     fn default() -> Self {

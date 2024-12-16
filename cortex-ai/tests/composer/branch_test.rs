@@ -12,6 +12,7 @@ mod branch_builder_tests {
 
     use super::*;
 
+    #[derive(Clone)]
     struct ErrorCondition;
 
     impl FlowComponent for ErrorCondition {

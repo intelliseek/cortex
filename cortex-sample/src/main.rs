@@ -80,6 +80,7 @@ where
 }
 
 // Generic condition that checks a field
+#[derive(Clone)]
 struct FieldCondition<T, F>
 where
     F: Fn(&T) -> String,

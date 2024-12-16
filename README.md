@@ -1,4 +1,4 @@
- # Cortex Project
+# Cortex Project
 
 A collection of high-performance, asynchronous data processing libraries built in Rust, designed for RAG (Retrieval-Augmented Generation) applications and AI workflows.
 
@@ -33,6 +33,15 @@ Ready-made source implementations for various data inputs:
 - API endpoints
 - Streaming data sources
 
+### cortex-sinks (Coming Soon)
+Ready-made sink implementations for various data outputs:
+- File system sinks
+- Database writers
+- Message queue publishers
+- API clients
+- Metrics and monitoring integrations
+- Vector store writers
+
 ### cortex-conditions (Coming Soon)
 A library of reusable conditions for flow control:
 - Data validation conditions
@@ -52,6 +61,7 @@ cargo add cortex-ai
 # Coming soon:
 # cargo add cortex-processors
 # cargo add cortex-sources
+# cargo add cortex-sinks
 # cargo add cortex-conditions
 ```
 

@@ -19,6 +19,7 @@ tokio = { version = "1.0", features = [
 flume = "0.11"
 tracing = "0.1"
 tracing-futures = "0.2"
+either = "1.9"
 
 [dev-dependencies]
 tokio = { version = "1.0", features = [

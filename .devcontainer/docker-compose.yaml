@@ -1,0 +1,131 @@
+name: cortex-ai
+networks:
+  cortex-network:
+    driver: bridge
+
+volumes:
+  redpanda: null
+  keydb: null
+  clickhouse-data: null
+
+services:
+  devcontainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cortex-devcontainer
+    networks:
+      - cortex-network
+    volumes:
+      - ..:/home/vscode/cortex:cached
+    working_dir: /home/vscode/cortex
+    devices:
+      - /dev/ppp
+    cap_add:
+      - NET_ADMIN
+    stdin_open: true
+    tty: true
+    command: sleep infinity
+    deploy:
+      resources:
+        limits:
+          cpus: '16'
+          memory: 16G
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.4
+    container_name: cortex-redpanda
+    command:
+      - redpanda
+      - start
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      # Address the broker advertises to clients that connect to the Kafka API.
+      # Use the internal addresses to connect to the Redpanda brokers'
+      # from inside the same Docker network.
+      # Use the external addresses to connect to the Redpanda brokers'
+      # from outside the Docker network.
+      - --advertise-kafka-addr internal://redpanda:9092,external://redpanda:19092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+      # Address the broker advertises to clients that connect to the HTTP Proxy.
+      - --advertise-pandaproxy-addr internal://redpanda:8082,external://redpanda:18082
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+      # Redpanda brokers use the RPC API to communicate with each other internally.
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+      # Mode dev-container uses well-known configuration properties for development in containers.
+      - --mode dev-container
+      # Tells Seastar (the framework Redpanda uses under the hood) to use 1 core on the system.
+      - --smp 1
+      - --default-log-level=info
+    volumes:
+      - redpanda:/var/lib/redpanda/data
+    networks:
+      - cortex-network
+    ports:
+      - 18081:18081
+      - 18082:18082
+      - 19092:19092
+      - 19644:9644
+      
+  console:
+    container_name: cortex-redpanda-console
+    image: docker.redpanda.com/redpandadata/console:v2.7.2
+    networks:
+      - cortex-network
+    entrypoint: /bin/sh
+    command: -c 'echo "$$CONSOLE_CONFIG_FILE" > /tmp/config.yml; /app/console'
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["redpanda:9092"]
+          schemaRegistry:
+            enabled: true
+            urls: ["http://redpanda:8081"]
+        redpanda:
+          adminApi:
+            enabled: true
+            urls: ["http://redpanda:9644"]
+    ports:
+      - 8080:8080
+    depends_on:
+      - redpanda
+
+  keydb-0:
+    image: eqalpha/keydb:latest
+    container_name: cortex-keydb-0
+    hostname: cortex-keydb-0
+    volumes:
+      - keydb:/data
+    networks:
+      - cortex-network
+    ports:
+      - 6379:6379
+    command: keydb-server --active-replica yes --multi-master yes --replicaof keydb-1 6379
+  keydb-1:
+    image: eqalpha/keydb:latest
+    container_name: cortex-keydb-1
+    hostname: cortex-keydb-1
+    volumes:
+      - keydb:/data
+    networks:
+      - cortex-network
+    ports:
+      - 6380:6379
+    command: keydb-server --active-replica yes --multi-master yes --replicaof keydb-0 6379
+
+  clickhouse:
+    image: clickhouse/clickhouse-server
+    container_name: cortex-clickhouse
+    user: "101:101"
+    networks:
+      - cortex-network
+    ports:
+      - "8123:8123"   # HTTP interface
+      - "9000:9000"   # Native interface
+      - "9009:9009"   # Inter-server communication port
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144

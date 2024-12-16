@@ -6,7 +6,8 @@ use crate::flow::{
 };
 use std::error::Error;
 use std::marker::PhantomData;
-use tracing::{debug, instrument};
+use std::sync::Arc;
+use tracing::debug;
 
 /// A builder for constructing the alternative branch of a conditional flow.
 ///
@@ -16,6 +17,9 @@ use tracing::{debug, instrument};
 /// use cortex_ai::composer::Flow;
 /// use cortex_ai::flow::condition::Condition;
 /// use cortex_ai::flow::processor::Processor;
+/// use cortex_ai::flow::source::Source;
+/// use cortex_ai::flow::sink::Sink;
+/// use cortex_ai::flow::types::SourceOutput;
 /// use cortex_ai::FlowComponent;
 /// use cortex_ai::FlowError;
 /// use std::error::Error;
@@ -41,6 +45,25 @@ use tracing::{debug, instrument};
 ///     fn from(e: FlowError) -> Self { MyError }
 /// }
 ///
+/// struct MySource;
+/// impl FlowComponent for MySource {
+///     type Input = ();
+///     type Output = MyData;
+///     type Error = MyError;
+/// }
+///
+/// impl Source for MySource {
+///     fn stream(&self) -> Pin<Box<dyn Future<Output = Result<SourceOutput<Self::Output, Self::Error>, Self::Error>> + Send>> {
+///         Box::pin(async move {
+///             let (tx, rx) = flume::bounded(1);
+///             let (feedback_tx, _) = flume::bounded(1);
+///             Ok(SourceOutput { receiver: rx, feedback: feedback_tx })
+///         })
+///     }
+///
+///     fn on_feedback(&self, _result: Result<Self::Output, Self::Error>) {}
+/// }
+///
 /// struct MyProcessor;
 /// impl FlowComponent for MyProcessor {
 ///     type Input = MyData;
@@ -53,7 +76,7 @@ use tracing::{debug, instrument};
 ///         Box::pin(async move { Ok(input) })
 ///     }
 /// }
-///
+/// #[derive(Clone)]
 /// struct MyCondition;
 /// impl FlowComponent for MyCondition {
 ///     type Input = MyData;
@@ -67,16 +90,36 @@ use tracing::{debug, instrument};
 ///     }
 /// }
 ///
+/// struct MySink;
+/// impl FlowComponent for MySink {
+///     type Input = MyData;
+///     type Output = MyData;
+///     type Error = MyError;
+/// }
+///
+/// impl Sink for MySink {
+///     fn sink(&self, input: Self::Input) -> Pin<Box<dyn Future<Output = Result<Self::Output, Self::Error>> + Send>> {
+///         Box::pin(async move { Ok(input) })
+///     }
+/// }
+///
 /// let flow = Flow::<MyData, MyError, bool>::new()
+///     .source(MySource)
 ///     .when(MyCondition)
 ///     .process(MyProcessor)
 ///     .otherwise()
 ///     .process(MyProcessor)
-///     .end();
+///     .end()
+///     .sink(MySink);
 /// ```
-pub struct OtherwiseBuilder<DataType, OutputType, ErrorType> {
+pub struct OtherwiseBuilder<DataType, OutputType, ErrorType>
+where
+    DataType: Clone + Send + Sync + 'static,
+    ErrorType: Error + Send + Sync + Clone + 'static,
+    OutputType: Send + Sync + Clone + 'static,
+{
     condition:
-        Box<dyn Condition<Input = DataType, Output = OutputType, Error = ErrorType> + Send + Sync>,
+        Arc<dyn Condition<Input = DataType, Output = OutputType, Error = ErrorType> + Send + Sync>,
     then_branch: Vec<Stage<DataType, ErrorType, OutputType>>,
     else_branch: Vec<Stage<DataType, ErrorType, OutputType>>,
     parent: Flow<DataType, ErrorType, OutputType>,
@@ -85,8 +128,8 @@ pub struct OtherwiseBuilder<DataType, OutputType, ErrorType> {
 impl<DataType, OutputType, ErrorType> OtherwiseBuilder<DataType, OutputType, ErrorType>
 where
     DataType: Clone + Send + Sync + 'static,
-    OutputType: Send + Sync + 'static,
-    ErrorType: Error + Send + Sync + 'static,
+    OutputType: Send + Sync + Clone + 'static,
+    ErrorType: Error + Send + Sync + Clone + 'static,
 {
     /// Creates a new `OtherwiseBuilder` with the specified condition, then branch, and parent flow.
     ///
@@ -97,9 +140,8 @@ where
     /// * `condition` - The condition from the parent branch
     /// * `then_branch` - The stages to execute when the condition is true
     /// * `parent` - The parent flow this branch belongs to
-    #[instrument(skip(condition, then_branch, parent))]
     pub(crate) fn new(
-        condition: Box<
+        condition: Arc<
             dyn Condition<Input = DataType, Output = OutputType, Error = ErrorType> + Send + Sync,
         >,
         then_branch: Vec<Stage<DataType, ErrorType, OutputType>>,
@@ -127,7 +169,6 @@ where
     /// # Type Parameters
     ///
     /// * `ProcessorType` - The type of the processor being added
-    #[instrument(skip(self, processor))]
     #[must_use]
     pub fn process<ProcessorType>(mut self, processor: ProcessorType) -> Self
     where
@@ -137,7 +178,7 @@ where
             + 'static,
     {
         debug!("Adding processor to else branch");
-        self.else_branch.push(Stage::Process(Box::new(processor)));
+        self.else_branch.push(Stage::Process(Arc::new(processor)));
         self
     }
 
@@ -149,11 +190,10 @@ where
     /// # Returns
     ///
     /// The parent flow with the completed branch stage added
-    #[instrument(skip(self))]
     #[must_use]
     pub fn end(self) -> Flow<DataType, ErrorType, OutputType> {
         debug!("Finalizing branch construction");
-        let branch_stage = Stage::Branch(Box::new(BranchStage {
+        let branch_stage = Stage::Branch(Arc::new(BranchStage {
             condition: self.condition,
             then_branch: self.then_branch,
             else_branch: self.else_branch,

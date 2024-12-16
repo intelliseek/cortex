@@ -4,12 +4,12 @@ use cortex_ai::{
     Processor, Sink, Source,
 };
 use flume::bounded;
-use tracing::info;
 use std::error::Error;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast;
+use tracing::info;
 use tracing_subscriber::EnvFilter;
-use std::sync::Arc;
 
 // Test Components
 #[derive(Debug, Clone)]
@@ -262,14 +262,14 @@ pub async fn run_flow_with_timeout<DataType, ErrorType, OutputType>(
 ) -> Result<Vec<DataType>, ErrorType>
 where
     DataType: Clone + Send + Sync + 'static,
-    OutputType: Send + Sync + 'static,
+    OutputType: Send + Sync + Clone + 'static,
     ErrorType: Error + Send + Sync + Clone + 'static + From<FlowError>,
 {
     let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
     let shutdown_tx = Arc::new(shutdown_tx);
     let shutdown_tx_clone = Arc::clone(&shutdown_tx);
 
-    let handle = tokio::spawn(async move { 
+    let handle = tokio::spawn(async move {
         let result = flow.run_stream(shutdown_rx).await;
         // Ensure we return before timeout if we have a result
         shutdown_tx_clone.send(()).ok();

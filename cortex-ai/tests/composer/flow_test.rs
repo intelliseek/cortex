@@ -575,7 +575,7 @@ mod flow_tests {
         }
 
         let (feedback_tx, _) = bounded::<Result<String, FlowError>>(1);
-        
+
         let flow: Flow<String, FlowError, String> = Flow::new()
             .source(TestSource {
                 data: "test".to_string(),
@@ -722,5 +722,131 @@ mod flow_tests {
         let result = run_flow_with_timeout(flow, Duration::from_millis(100)).await;
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn it_should_handle_nested_branches() {
+        init_tracing();
+        info!("Starting nested branches test");
+
+        let (feedback_tx, _) = bounded::<Result<String, FlowError>>(1);
+        let flow = Flow::new()
+            .source(TestSource {
+                data: "test".to_string(),
+                feedback: feedback_tx,
+            })
+            .when(TestCondition) // Start outer branch
+            .process(PassthroughProcessor)
+            .when(TestCondition) // Start nested branch in then branch
+            .process(PassthroughProcessor)
+            .end() // End nested branch
+            .map_left(|branch| {
+                branch
+                    .otherwise() // Handle Either::Left case
+                    .process(PassthroughProcessor)
+                    .end()
+            })
+            .map_right(|flow| flow) // Handle Either::Right case
+            .either(|branch| branch, |flow| flow) // Combine both cases
+            .sink(TestSink);
+
+        let result = run_flow_with_timeout(flow, Duration::from_millis(100)).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap()[0], "test");
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "Source must be the first component")]
+    async fn it_should_not_allow_source_after_processor() {
+        let (feedback_tx, _) = bounded::<Result<String, FlowError>>(1);
+        let _ = Flow::<String, FlowError, String>::new()
+            .process(PassthroughProcessor) // Add processor before source
+            .source(TestSource {
+                data: "test".to_string(),
+                feedback: feedback_tx,
+            });
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "Flow must start with a source")]
+    async fn it_should_not_allow_condition_without_source() {
+        let _ = Flow::<String, FlowError, String>::new()
+            .when(TestCondition)
+            .process(PassthroughProcessor)
+            .otherwise()
+            .process(PassthroughProcessor)
+            .end();
+    }
+
+    #[tokio::test]
+    async fn it_should_handle_branch_without_else() {
+        init_tracing();
+        info!("Starting branch without else test");
+
+        let (feedback_tx, _) = bounded::<Result<String, FlowError>>(1);
+        let flow = Flow::new()
+            .source(TestSource {
+                data: "test".to_string(),
+                feedback: feedback_tx,
+            })
+            .when(TestCondition)
+            .process(PassthroughProcessor)
+            .end() // End the branch without otherwise
+            .map_right(|flow| flow.sink(TestSink)) // Handle the Flow case
+            .map_left(|branch| {
+                branch
+                    .otherwise() // Handle the BranchBuilder case
+                    .process(PassthroughProcessor)
+                    .end()
+                    .sink(TestSink)
+            })
+            .either(|flow| flow, |flow| flow); // Combine both cases
+
+        let result = run_flow_with_timeout(flow, Duration::from_millis(100)).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap()[0], "test");
+    }
+
+    #[tokio::test]
+    async fn it_should_handle_branch_without_then() {
+        init_tracing();
+        info!("Starting branch without then test");
+
+        let (feedback_tx, _) = bounded::<Result<String, FlowError>>(1);
+        let flow = Flow::new()
+            .source(TestSource {
+                data: "no_match".to_string(),
+                feedback: feedback_tx,
+            })
+            .when(TestCondition)
+            .otherwise()
+            .process(PassthroughProcessor)
+            .end()
+            .sink(TestSink);
+
+        let result = run_flow_with_timeout(flow, Duration::from_millis(100)).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap()[0], "no_match");
+    }
+
+    #[tokio::test]
+    async fn it_should_handle_empty_branches() {
+        init_tracing();
+        info!("Starting empty branches test");
+
+        let (feedback_tx, _) = bounded::<Result<String, FlowError>>(1);
+        let flow = Flow::new()
+            .source(TestSource {
+                data: "test".to_string(),
+                feedback: feedback_tx,
+            })
+            .when(TestCondition)
+            .otherwise()
+            .end()
+            .sink(TestSink);
+
+        let result = run_flow_with_timeout(flow, Duration::from_millis(100)).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap()[0], "test");
     }
 }

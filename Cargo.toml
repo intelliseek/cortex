@@ -4,7 +4,8 @@ members = [
     "cortex-ai",
     "cortex-sample",
     "cortex-sources",
-    "cortex-processors"
+    "cortex-processors",
+    "cortex-sinks"
 ]
 
 [workspace.package]
